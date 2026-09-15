@@ -11,54 +11,64 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: تنزيل المستودع
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: إعداد Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: إعداد Android SDK يدوياً
+      - name: Find Android SDK tools
         shell: bash
         run: |
           SDK="/usr/local/lib/android/sdk"
+
+          test -d "$SDK"
+
+          SDKMANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)
+
+          test -n "$SDKMANAGER"
+
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$SDK/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
-      - name: تثبيت مكونات Android
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+          echo "SDK found at: $SDK"
+          echo "SDK Manager found at: $SDKMANAGER"
+
+      - name: Install Android components
         shell: bash
         run: |
-          SDK="/usr/local/lib/android/sdk"
-          MANAGER="$SDK/cmdline-tools/16.0/bin/sdkmanager"
+          test -x "$SDKMANAGER"
 
-          test -x "$MANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses || true
 
-          yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
-
-          "$MANAGER" --sdk_root="$SDK" \
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: إعداد Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: فك النسخة
+      - name: Extract final ZIP
         shell: bash
         run: |
           test -f "Dalil_Syria_FINAL_READY_VERIFIED.zip"
+
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
+
           unzip -q "Dalil_Syria_FINAL_READY_VERIFIED.zip" -d extracted
 
-      - name: تحديد مشروع Android
+      - name: Locate Android project
         shell: bash
         run: |
           SETTINGS=$(find extracted -type f \( \
@@ -69,37 +79,39 @@ jobs:
           test -n "$SETTINGS"
 
           PROJECT_DIR="$(dirname "$SETTINGS")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: إصلاح اعتماد AndroidX
+          echo "Project found at: $PROJECT_DIR"
+
+      - name: Fix AndroidX dependency
         shell: bash
         run: |
           APP="$PROJECT_DIR/app/build.gradle"
+
           test -f "$APP"
 
           if ! grep -q "androidx.core:core" "$APP"; then
-            cat >> "$APP" <<'EOF'
-
-dependencies {
-    implementation "androidx.core:core:1.13.1"
-}
-EOF
+            printf '\ndependencies {\n    implementation "androidx.core:core:1.13.1"\n}\n' >> "$APP"
           fi
 
-          cat > "$PROJECT_DIR/gradle.properties" <<'EOF'
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-android.enableJetifier=true
-android.nonTransitiveRClass=true
-EOF
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
+            'android.useAndroidX=true' \
+            'android.enableJetifier=true' \
+            'android.nonTransitiveRClass=true' \
+            > "$PROJECT_DIR/gradle.properties"
 
-      - name: بناء التطبيق
+      - name: Build APK
         shell: bash
         run: |
           cd "$PROJECT_DIR"
-          gradle assembleDebug --no-daemon --stacktrace
 
-      - name: تجهيز ملف APK
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Collect APK
         shell: bash
         run: |
           APK=$(find "$PROJECT_DIR" \
@@ -111,7 +123,9 @@ EOF
 
           cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-test.apk"
 
-      - name: رفع APK
+          ls -lh "$GITHUB_WORKSPACE/dalil-syria-test.apk"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: dalil-syria-test-apk
