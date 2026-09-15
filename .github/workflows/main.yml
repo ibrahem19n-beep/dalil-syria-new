@@ -1,0 +1,98 @@
+name: Build Dalil Syria APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          SDK="/usr/local/lib/android/sdk"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+
+      - name: Install Android components
+        shell: bash
+        run: |
+          SDK="/usr/local/lib/android/sdk"
+          MANAGER="$SDK/cmdline-tools/16.0/bin/sdkmanager"
+          test -x "$MANAGER"
+          yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
+          "$MANAGER" --sdk_root="$SDK" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          test -f "Dalil_Syria_FINAL_READY_VERIFIED.zip"
+          rm -rf extracted
+          mkdir extracted
+          unzip -q "Dalil_Syria_FINAL_READY_VERIFIED.zip" -d extracted
+
+      - name: Locate project
+        shell: bash
+        run: |
+          SETTINGS=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          test -n "$SETTINGS"
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Fix AndroidX
+        shell: bash
+        run: |
+          APP="$PROJECT_DIR/app/build.gradle"
+          test -f "$APP"
+
+          if ! grep -q "androidx.core:core" "$APP"; then
+            printf '\ndependencies {\n    implementation "androidx.core:core:1.13.1"\n}\n' >> "$APP"
+          fi
+
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
+            'android.useAndroidX=true' \
+            'android.enableJetifier=true' \
+            'android.nonTransitiveRClass=true' \
+            > "$PROJECT_DIR/gradle.properties"
+
+      - name: Build APK
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          APK=$(find "$PROJECT_DIR" -type f -path "*/outputs/apk/debug/*.apk" | head -n 1)
+          test -n "$APK"
+          test -s "$APK"
+          cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-test.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dalil-syria-test-apk
+          path: dalil-syria-test.apk
+          retention-days: 14
