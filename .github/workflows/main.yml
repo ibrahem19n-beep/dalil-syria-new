@@ -1,5 +1,3 @@
-name: Build Dalil Syria APK
-
 on:
   workflow_dispatch:
   push:
@@ -23,20 +21,28 @@ jobs:
       - name: Configure Android SDK
         shell: bash
         run: |
-          SDK="/usr/local/lib/android/sdk"
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
       - name: Install Android components
         shell: bash
         run: |
-          SDK="/usr/local/lib/android/sdk"
-          MANAGER="$SDK/cmdline-tools/16.0/bin/sdkmanager"
-          test -x "$MANAGER"
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$MANAGER" ]; then
+            MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
+          fi
+
+          test -n "$MANAGER"
           yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
-          "$MANAGER" --sdk_root="$SDK" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$MANAGER" --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
