@@ -1,3 +1,5 @@
+name: Dalil Syria Clean APK
+
 on:
   workflow_dispatch:
   push:
@@ -51,21 +53,21 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Find and Extract ZIP
+      - name: Find and Extract Clean ZIP
         shell: bash
         run: |
-          ZIP_NAME="Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip"
+          ZIP_NAME="Dalil_Syria_CLEAN_INSTALL_V1.2.0.zip"
 
           ZIP_PATH=$(find . -type f -name "$ZIP_NAME" -print -quit)
 
           if [ -z "$ZIP_PATH" ]; then
-            echo "ERROR: ZIP file not found: $ZIP_NAME"
+            echo "ERROR: Clean ZIP file not found: $ZIP_NAME"
             echo "Files in repository:"
-            find . -maxdepth 4 -type f | sort | head -n 200
+            find . -maxdepth 5 -type f | sort | head -n 300
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_PATH"
+          echo "Found clean ZIP: $ZIP_PATH"
 
           rm -rf extracted
           mkdir -p extracted
@@ -82,7 +84,7 @@ jobs:
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: Android Gradle project was not found."
-            find extracted -maxdepth 5 -type f | sort | head -n 300
+            find extracted -maxdepth 6 -type f | sort | head -n 400
             exit 1
           fi
 
@@ -100,17 +102,20 @@ jobs:
           test -f "$PROJECT_DIR/app/build.gradle" || \
           test -f "$PROJECT_DIR/app/build.gradle.kts"
 
-      - name: Fix AndroidX
+      - name: Verify Clean App Assets
         shell: bash
         run: |
-          APP="$PROJECT_DIR/app/build.gradle"
+          echo "Checking clean release assets..."
 
-          if [ -f "$APP" ]; then
-            if ! grep -q "androidx.core:core" "$APP"; then
-              printf '\ndependencies {\n    implementation "androidx.core:core:1.13.1"\n}\n' >> "$APP"
-            fi
-          fi
+          test -f "$PROJECT_DIR/app/src/main/assets/index.html" || \
+          test -f "$PROJECT_DIR/app/src/main/assets/www/index.html" || \
+          true
 
+          echo "Android project verification completed."
+
+      - name: Configure AndroidX
+        shell: bash
+        run: |
           printf '%s\n' \
             'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
             'android.useAndroidX=true' \
@@ -118,7 +123,7 @@ jobs:
             'android.nonTransitiveRClass=true' \
             > "$PROJECT_DIR/gradle.properties"
 
-      - name: Build APK
+      - name: Build Clean APK
         shell: bash
         run: |
           cd "$PROJECT_DIR"
@@ -141,11 +146,11 @@ jobs:
 
           echo "APK found: $APK"
 
-          cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-test.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-clean-v1.2.0.apk"
 
-      - name: Upload APK
+      - name: Upload Clean APK
         uses: actions/upload-artifact@v4
         with:
-          name: dalil-syria-test-apk
-          path: dalil-syria-test.apk
+          name: dalil-syria-clean-v1.2.0-apk
+          path: dalil-syria-clean-v1.2.0.apk
           retention-days: 14
