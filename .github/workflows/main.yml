@@ -38,6 +38,7 @@ jobs:
           fi
 
           test -n "$MANAGER"
+
           yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
 
           "$MANAGER" --sdk_root="$SDK" \
@@ -50,34 +51,64 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Extract ZIP
+      - name: Find and Extract ZIP
         shell: bash
         run: |
-          test -f "Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip"
+          ZIP_NAME="Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip"
+
+          ZIP_PATH=$(find . -type f -name "$ZIP_NAME" -print -quit)
+
+          if [ -z "$ZIP_PATH" ]; then
+            echo "ERROR: ZIP file not found: $ZIP_NAME"
+            echo "Files in repository:"
+            find . -maxdepth 4 -type f | sort | head -n 200
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP_PATH"
+
           rm -rf extracted
-          mkdir extracted
-          unzip -q "Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip" -d extracted
+          mkdir -p extracted
 
-      - name: Locate project
+          unzip -q "$ZIP_PATH" -d extracted
+
+      - name: Locate Android Project
         shell: bash
         run: |
-          SETTINGS=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          SETTINGS=$(find extracted -type f \( \
+            -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+          \) -print -quit)
 
-          test -n "$SETTINGS"
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: Android Gradle project was not found."
+            find extracted -maxdepth 5 -type f | sort | head -n 300
+            exit 1
+          fi
 
           PROJECT_DIR="$(dirname "$SETTINGS")"
 
+          echo "Android project found at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Check Android Project
+        shell: bash
+        run: |
+          test -f "$PROJECT_DIR/settings.gradle" || \
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+
+          test -f "$PROJECT_DIR/app/build.gradle" || \
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
 
       - name: Fix AndroidX
         shell: bash
         run: |
           APP="$PROJECT_DIR/app/build.gradle"
 
-          test -f "$APP"
-
-          if ! grep -q "androidx.core:core" "$APP"; then
-            printf '\ndependencies {\n    implementation "androidx.core:core:1.13.1"\n}\n' >> "$APP"
+          if [ -f "$APP" ]; then
+            if ! grep -q "androidx.core:core" "$APP"; then
+              printf '\ndependencies {\n    implementation "androidx.core:core:1.13.1"\n}\n' >> "$APP"
+            fi
           fi
 
           printf '%s\n' \
@@ -96,10 +127,19 @@ jobs:
       - name: Collect APK
         shell: bash
         run: |
-          APK=$(find "$PROJECT_DIR" -type f -path "*/outputs/apk/debug/*.apk" | head -n 1)
+          APK=$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/outputs/apk/debug/*.apk" \
+            -print -quit)
 
-          test -n "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not produced."
+            exit 1
+          fi
+
           test -s "$APK"
+
+          echo "APK found: $APK"
 
           cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-test.apk"
 
