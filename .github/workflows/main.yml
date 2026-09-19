@@ -39,6 +39,7 @@ jobs:
 
           test -n "$MANAGER"
           yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
+
           "$MANAGER" --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
@@ -52,23 +53,27 @@ jobs:
       - name: Extract ZIP
         shell: bash
         run: |
-          test -f "Dalil_Syria_FINAL_READY_VERIFIED.zip"
+          test -f "Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip"
           rm -rf extracted
           mkdir extracted
-          unzip -q "Dalil_Syria_FINAL_READY_VERIFIED.zip" -d extracted
+          unzip -q "Dalil_Syria_SAMPLE_RC_265_FULL_AUDITED.zip" -d extracted
 
       - name: Locate project
         shell: bash
         run: |
           SETTINGS=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+
           test -n "$SETTINGS"
+
           PROJECT_DIR="$(dirname "$SETTINGS")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Fix AndroidX
         shell: bash
         run: |
           APP="$PROJECT_DIR/app/build.gradle"
+
           test -f "$APP"
 
           if ! grep -q "androidx.core:core" "$APP"; then
@@ -92,8 +97,10 @@ jobs:
         shell: bash
         run: |
           APK=$(find "$PROJECT_DIR" -type f -path "*/outputs/apk/debug/*.apk" | head -n 1)
+
           test -n "$APK"
           test -s "$APK"
+
           cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-test.apk"
 
       - name: Upload APK
