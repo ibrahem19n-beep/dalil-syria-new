@@ -23,7 +23,7 @@ jobs:
 
           mkdir -p v14 clean project
 
-          unzip -q "Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip" -d v14
+                    unzip -q ".github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip" -d v14
           unzip -q "Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip" -d clean
 
       - name: Locate projects
