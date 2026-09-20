@@ -53,104 +53,67 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Find and Extract Clean ZIP
+      - name: Find and Extract Clean Package
         shell: bash
         run: |
-          ZIP_NAME="Dalil_Syria_CLEAN_INSTALL_V1.2.0.zip"
-
+          ZIP_NAME="Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip"
           ZIP_PATH=$(find . -type f -name "$ZIP_NAME" -print -quit)
 
           if [ -z "$ZIP_PATH" ]; then
-            echo "ERROR: Clean ZIP file not found: $ZIP_NAME"
-            echo "Files in repository:"
-            find . -maxdepth 5 -type f | sort | head -n 300
+            echo "ERROR: $ZIP_NAME not found."
             exit 1
           fi
 
-          echo "Found clean ZIP: $ZIP_PATH"
-
           rm -rf extracted
           mkdir -p extracted
-
           unzip -q "$ZIP_PATH" -d extracted
 
       - name: Locate Android Project
         shell: bash
         run: |
-          SETTINGS=$(find extracted -type f \( \
-            -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-          \) -print -quit)
+          SETTINGS=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Android Gradle project was not found."
-            find extracted -maxdepth 6 -type f | sort | head -n 400
+            echo "ERROR: Android project not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
-
-          echo "Android project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Check Android Project
-        shell: bash
-        run: |
-          test -f "$PROJECT_DIR/settings.gradle" || \
-          test -f "$PROJECT_DIR/settings.gradle.kts"
-
-          test -f "$PROJECT_DIR/app/build.gradle" || \
-          test -f "$PROJECT_DIR/app/build.gradle.kts"
-
-      - name: Verify Clean App Assets
-        shell: bash
-        run: |
-          echo "Checking clean release assets..."
-
-          test -f "$PROJECT_DIR/app/src/main/assets/index.html" || \
-          test -f "$PROJECT_DIR/app/src/main/assets/www/index.html" || \
-          true
-
-          echo "Android project verification completed."
+          ANDROID_DIR=$(dirname "$SETTINGS")
+          echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
 
       - name: Configure AndroidX
         shell: bash
         run: |
-          printf '%s\n' \
-            'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
-            'android.useAndroidX=true' \
-            'android.enableJetifier=true' \
-            'android.nonTransitiveRClass=true' \
-            > "$PROJECT_DIR/gradle.properties"
+          cd "$ANDROID_DIR"
 
-      - name: Build Clean APK
+          touch gradle.properties
+
+          grep -q '^android.useAndroidX=true$' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q '^android.enableJetifier=true$' gradle.properties || echo 'android.enableJetifier=true' >> gradle.properties
+
+      - name: Build APK
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "$ANDROID_DIR"
           gradle assembleDebug --no-daemon --stacktrace
 
       - name: Collect APK
         shell: bash
         run: |
-          APK=$(find "$PROJECT_DIR" \
-            -type f \
-            -path "*/outputs/apk/debug/*.apk" \
-            -print -quit)
+          mkdir -p apk-output
+
+          APK=$(find "$ANDROID_DIR/app/build/outputs/apk" -type f -name '*.apk' | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not produced."
+            echo 'ERROR: APK was not generated.'
             exit 1
           fi
 
-          test -s "$APK"
+          cp "$APK" apk-output/dalil-syria-v1.2.0-debug.apk
 
-          echo "APK found: $APK"
-
-          cp "$APK" "$GITHUB_WORKSPACE/dalil-syria-clean-v1.2.0.apk"
-
-      - name: Upload Clean APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dalil-syria-clean-v1.2.0-apk
-          path: dalil-syria-clean-v1.2.0.apk
-          retention-days: 14
+          name: dalil-syria-v1.2.0
+          path: apk-output/dalil-syria-v1.2.0-debug.apk
+          if-no-files-found: error
