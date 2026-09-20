@@ -27,7 +27,7 @@ jobs:
           fi
 
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-          echo "Using: $ZIP"
+          echo "Using ZIP: $ZIP"
 
       - name: Extract V1.4 project
         shell: bash
@@ -46,24 +46,40 @@ jobs:
             exit 1
           fi
 
-          ROOT=$(dirname "$SETTINGS")
+          PROJECT_ROOT=$(dirname "$SETTINGS")
 
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-          echo "Project root: $ROOT"
+          echo "Project root: $PROJECT_ROOT"
+
+      - name: Verify bulk builder location
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Searching for build_bulk_places.py..."
+
+          find "$PROJECT_ROOT" -type f -name 'build_bulk_places.py' -print
+
+          if [ ! -f "$PROJECT_ROOT/tools/build_bulk_places.py" ]; then
+            echo "ERROR: Correct builder not found:"
+            echo "$PROJECT_ROOT/tools/build_bulk_places.py"
+            exit 1
+          fi
+
+          echo "BULK_BUILDER_OK"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install DuckDB
+      - name: Install Python dependencies
         shell: bash
         run: |
           set -euo pipefail
 
           python -m pip install --upgrade pip
-
           python -m pip install "duckdb>=1.4.0,<1.5"
 
       - name: Build Damascus + Rif Dimashq bulk dataset
@@ -75,9 +91,12 @@ jobs:
 
           python tools/build_bulk_places.py --limit 10000
 
-          test -s mobile_app/data/places.json
+          if [ ! -s mobile_app/data/places.json ]; then
+            echo "ERROR: places.json was not generated."
+            exit 1
+          fi
 
-          echo "Bulk dataset generated."
+          echo "Bulk dataset generated successfully."
 
           python - <<'PY'
           import json
@@ -91,12 +110,18 @@ jobs:
 
           print("FINAL_PLACE_COUNT=", len(data))
 
+          if not isinstance(data, list):
+              raise SystemExit("ERROR: places.json is not a list.")
+
           ids = [str(x.get("id")) for x in data]
 
           if len(ids) != len(set(ids)):
               raise SystemExit("ERROR: duplicate place IDs found.")
 
           for x in data:
+              if "latitude" not in x or "longitude" not in x:
+                  raise SystemExit("ERROR: place missing coordinates.")
+
               lat = float(x["latitude"])
               lon = float(x["longitude"])
 
@@ -107,7 +132,6 @@ jobs:
                   raise SystemExit("ERROR: invalid longitude.")
 
           print("DATA_AUDIT_OK")
-
           PY
 
       - name: Copy updated data into Android assets
@@ -123,7 +147,7 @@ jobs:
 
           cp -a mobile_app android/app/src/main/assets/mobile_app
 
-          echo "Android data updated."
+          echo "Android assets updated."
 
       - name: Configure Android SDK
         shell: bash
@@ -161,6 +185,8 @@ jobs:
       - name: Configure AndroidX
         shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_ROOT/android"
 
           touch gradle.properties
@@ -182,12 +208,12 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      - name: Collect APK
+      - name: Collect APK and data
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p apk-output
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
 
           APK=$(find "$PROJECT_ROOT/android/app/build/outputs/apk" \
             -type f \
@@ -200,16 +226,16 @@ jobs:
           fi
 
           cp "$APK" \
-            apk-output/dalil-syria-v1.4-damascus-rif-debug.apk
+            "$GITHUB_WORKSPACE/apk-output/dalil-syria-v1.4-damascus-rif-debug.apk"
 
           cp "$PROJECT_ROOT/mobile_app/data/places.json" \
-            apk-output/places.json
+            "$GITHUB_WORKSPACE/apk-output/places.json"
 
-          sha256sum apk-output/* \
-            > apk-output/SHA256SUMS.txt
+          sha256sum "$GITHUB_WORKSPACE/apk-output/"* \
+            > "$GITHUB_WORKSPACE/apk-output/SHA256SUMS.txt"
 
           echo "FINAL ARTIFACTS:"
-          ls -lh apk-output
+          ls -lh "$GITHUB_WORKSPACE/apk-output"
 
       - name: Upload APK and data
         uses: actions/upload-artifact@v4
