@@ -1,4 +1,4 @@
-name: دليل سوريا 1.4 - دمشق + ريف دمشق Bulk APK
+name: Dalil Syria 1.4 - Damascus + Rif Dimashq Bulk APK
 
 on:
   workflow_dispatch:
@@ -11,34 +11,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find latest V1.4 package
+      - name: Locate V1.4 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for V1.4 package..."
-
-          ZIP=$(find . -type f \
-            -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' \
-            -print -quit)
+          ZIP=$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: V1.4 package not found."
-            echo "Available ZIP files:"
-            find . -type f -name '*.zip' -print
+            echo "ERROR: V1.4 ZIP not found."
             exit 1
           fi
 
-          echo "FOUND V1.4 PACKAGE:"
-          echo "$ZIP"
-
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "Using: $ZIP"
 
-      - name: Extract V1.4 package
+      - name: Extract V1.4 project
         shell: bash
         run: |
           set -euo pipefail
@@ -48,78 +39,53 @@ jobs:
 
           unzip -q "$ZIP" -d project
 
-          echo "Extracted files:"
-          find project -maxdepth 3 -type f | head -100
-
-          SETTINGS=$(find project -type f \
-            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-            -print -quit)
+          SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: Android project not found."
             exit 1
           fi
 
-          PROJECT_ROOT=$(dirname "$SETTINGS")
+          ROOT=$(dirname "$SETTINGS")
 
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $ROOT"
 
-          echo "PROJECT ROOT:"
-          echo "$PROJECT_ROOT"
-
-      - name: Verify V1.4 bulk tool
+      - name: Verify bulk builder location
         shell: bash
         run: |
           set -euo pipefail
 
-          cd "$PROJECT_ROOT"
+          test -f "$PROJECT_ROOT/tools/build_bulk_places.py"
 
-          echo "Checking V1.4 tools..."
+          echo "Bulk builder found:"
+          echo "$PROJECT_ROOT/tools/build_bulk_places.py"
 
-          if [ ! -f "tools/build_bulk_places.py" ]; then
-            echo "ERROR: tools/build_bulk_places.py not found."
-
-            echo "Searching for the file:"
-            find . -type f -name 'build_bulk_places.py' -print
-
-            exit 1
-          fi
-
-          echo "CORRECT TOOL FOUND:"
-          realpath tools/build_bulk_places.py
-
-      - name: Setup Python
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies
+      - name: Install DuckDB
         shell: bash
         run: |
           set -euo pipefail
 
           python -m pip install --upgrade pip
+          python -m pip install "duckdb>=1.4.0,<1.5"
 
-          python -m pip install \
-            "duckdb>=1.4.0,<1.5"
-
-      - name: Build Damascus + Rif Dimashq dataset
+      - name: Build Damascus + Rif Dimashq bulk dataset
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$PROJECT_ROOT"
 
-          echo "RUNNING V1.4 BULK BUILDER..."
-
           python tools/build_bulk_places.py --limit 10000
 
-          if [ ! -s "mobile_app/data/places.json" ]; then
-            echo "ERROR: places.json was not generated."
-            exit 1
-          fi
+          test -s mobile_app/data/places.json
 
-          echo "DATASET GENERATED."
+          echo "Bulk dataset generated."
 
           python - <<'PY'
           import json
@@ -131,40 +97,27 @@ jobs:
               p.read_text(encoding="utf-8")
           )
 
-          print("FINAL_PLACE_COUNT =", len(data))
+          print("FINAL_PLACE_COUNT=", len(data))
 
-          if not data:
-              raise SystemExit("ERROR: dataset is empty.")
-
-          ids = [
-              str(x.get("id"))
-              for x in data
-          ]
+          ids = [str(x.get("id")) for x in data]
 
           if len(ids) != len(set(ids)):
-              raise SystemExit(
-                  "ERROR: duplicate place IDs found."
-              )
+              raise SystemExit("ERROR: duplicate place IDs found.")
 
           for x in data:
               lat = float(x["latitude"])
               lon = float(x["longitude"])
 
               if not (-90 <= lat <= 90):
-                  raise SystemExit(
-                      "ERROR: invalid latitude."
-                  )
+                  raise SystemExit("ERROR: invalid latitude.")
 
               if not (-180 <= lon <= 180):
-                  raise SystemExit(
-                      "ERROR: invalid longitude."
-                  )
+                  raise SystemExit("ERROR: invalid longitude.")
 
           print("DATA_AUDIT_OK")
-
           PY
 
-      - name: Sync data into Android
+      - name: Copy updated data into Android assets
         shell: bash
         run: |
           set -euo pipefail
@@ -175,10 +128,9 @@ jobs:
 
           mkdir -p android/app/src/main/assets
 
-          cp -a mobile_app \
-            android/app/src/main/assets/mobile_app
+          cp -a mobile_app android/app/src/main/assets/mobile_app
 
-          echo "ANDROID DATA SYNC OK."
+          echo "Android data updated."
 
       - name: Configure Android SDK
         shell: bash
@@ -196,21 +148,14 @@ jobs:
           MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$MANAGER" ]; then
-            MANAGER=$(find "$SDK/cmdline-tools" \
-              -type f \
-              -name sdkmanager \
-              -perm -111 \
-              | head -n 1)
+            MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
           fi
 
           test -n "$MANAGER"
 
-          yes | "$MANAGER" \
-            --sdk_root="$SDK" \
-            --licenses || true
+          yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
 
-          "$MANAGER" \
-            --sdk_root="$SDK" \
+          "$MANAGER" --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
@@ -223,36 +168,28 @@ jobs:
       - name: Configure AndroidX
         shell: bash
         run: |
-          set -euo pipefail
-
           cd "$PROJECT_ROOT/android"
 
           touch gradle.properties
 
-          grep -q '^android.useAndroidX=true$' \
-            gradle.properties || \
-            echo 'android.useAndroidX=true' \
-            >> gradle.properties
+          grep -q '^android.useAndroidX=true$' gradle.properties || \
+            echo 'android.useAndroidX=true' >> gradle.properties
 
-          grep -q '^android.enableJetifier=true$' \
-            gradle.properties || \
-            echo 'android.enableJetifier=true' \
-            >> gradle.properties
+          grep -q '^android.enableJetifier=true$' gradle.properties || \
+            echo 'android.enableJetifier=true' >> gradle.properties
 
-      - name: Build latest V1.4 APK
+      - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$PROJECT_ROOT/android"
 
-          echo "BUILDING LATEST V1.4 APK..."
-
           gradle assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Collect final APK
+      - name: Collect APK
         shell: bash
         run: |
           set -euo pipefail
@@ -278,10 +215,10 @@ jobs:
           sha256sum apk-output/* \
             > apk-output/SHA256SUMS.txt
 
-          echo "FINAL FILES:"
+          echo "FINAL ARTIFACTS:"
           ls -lh apk-output
 
-      - name: Upload final V1.4 files
+      - name: Upload APK and data
         uses: actions/upload-artifact@v4
         with:
           name: dalil-syria-v1.4-damascus-rif
