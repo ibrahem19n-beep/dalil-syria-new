@@ -19,7 +19,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP=$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)
+          ZIP=$(find . -type f \
+            -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' \
+            -print -quit)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: V1.4 ZIP not found."
@@ -27,7 +29,7 @@ jobs:
           fi
 
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-          echo "Using: $ZIP"
+          echo "Using ZIP: $ZIP"
 
       - name: Extract V1.4 project
         shell: bash
@@ -39,82 +41,133 @@ jobs:
 
           unzip -q "$ZIP" -d project
 
-          SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+          SETTINGS=$(find project -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: Android project not found."
+            find project -maxdepth 4 -type f | head -200
             exit 1
           fi
 
           ROOT=$(dirname "$SETTINGS")
 
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+
           echo "Project root: $ROOT"
 
-      - name: Verify bulk builder location
+      - name: Locate bulk builder
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f "$PROJECT_ROOT/tools/build_bulk_places.py"
+          SCRIPT=$(find "$PROJECT_ROOT" -type f \
+            -name 'build_bulk_places.py' \
+            -print -quit)
 
-          echo "Bulk builder found:"
-          echo "$PROJECT_ROOT/tools/build_bulk_places.py"
+          if [ -z "$SCRIPT" ]; then
+            echo "ERROR: build_bulk_places.py was not found."
+            echo "Files under project:"
+            find "$PROJECT_ROOT" -maxdepth 5 -type f | sort | head -300
+            exit 1
+          fi
+
+          echo "BULK_SCRIPT=$SCRIPT" >> "$GITHUB_ENV"
+
+          echo "Bulk builder found at:"
+          echo "$SCRIPT"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install DuckDB
+      - name: Install Python dependencies
         shell: bash
         run: |
           set -euo pipefail
 
           python -m pip install --upgrade pip
-          python -m pip install "duckdb>=1.4.0,<1.5"
+
+          python -m pip install \
+            "duckdb>=1.4.0,<1.5"
 
       - name: Build Damascus + Rif Dimashq bulk dataset
         shell: bash
         run: |
           set -euo pipefail
 
-          cd "$PROJECT_ROOT"
+          SCRIPT_DIR=$(dirname "$BULK_SCRIPT")
 
-          python tools/build_bulk_places.py --limit 10000
+          cd "$SCRIPT_DIR"
 
-          test -s mobile_app/data/places.json
+          echo "Running:"
+          echo "$BULK_SCRIPT"
+
+          python "$BULK_SCRIPT" --limit 10000
+
+          PLACES="$PROJECT_ROOT/mobile_app/data/places.json"
+
+          if [ ! -s "$PLACES" ]; then
+            echo "ERROR: places.json was not generated."
+            exit 1
+          fi
 
           echo "Bulk dataset generated."
 
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          p = Path("mobile_app/data/places.json")
+          project_root = Path(os.environ["PROJECT_ROOT"])
+          places_path = project_root / "mobile_app" / "data" / "places.json"
 
           data = json.loads(
-              p.read_text(encoding="utf-8")
+              places_path.read_text(encoding="utf-8")
           )
 
+          if not isinstance(data, list):
+              raise SystemExit(
+                  "ERROR: places.json does not contain a list."
+              )
+
           print("FINAL_PLACE_COUNT=", len(data))
+
+          if len(data) == 0:
+              raise SystemExit(
+                  "ERROR: places.json is empty."
+              )
 
           ids = [str(x.get("id")) for x in data]
 
           if len(ids) != len(set(ids)):
-              raise SystemExit("ERROR: duplicate place IDs found.")
+              raise SystemExit(
+                  "ERROR: duplicate place IDs found."
+              )
 
           for x in data:
+              if "latitude" not in x or "longitude" not in x:
+                  raise SystemExit(
+                      "ERROR: place missing coordinates."
+                  )
+
               lat = float(x["latitude"])
               lon = float(x["longitude"])
 
               if not (-90 <= lat <= 90):
-                  raise SystemExit("ERROR: invalid latitude.")
+                  raise SystemExit(
+                      "ERROR: invalid latitude."
+                  )
 
               if not (-180 <= lon <= 180):
-                  raise SystemExit("ERROR: invalid longitude.")
+                  raise SystemExit(
+                      "ERROR: invalid longitude."
+                  )
 
           print("DATA_AUDIT_OK")
+
           PY
 
       - name: Copy updated data into Android assets
@@ -128,7 +181,8 @@ jobs:
 
           mkdir -p android/app/src/main/assets
 
-          cp -a mobile_app android/app/src/main/assets/mobile_app
+          cp -a mobile_app \
+            android/app/src/main/assets/mobile_app
 
           echo "Android data updated."
 
@@ -148,14 +202,24 @@ jobs:
           MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$MANAGER" ]; then
-            MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
+            MANAGER=$(find "$SDK/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -perm -111 \
+              | head -n 1)
           fi
 
-          test -n "$MANAGER"
+          if [ -z "$MANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
 
-          yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
+          yes | "$MANAGER" \
+            --sdk_root="$SDK" \
+            --licenses || true
 
-          "$MANAGER" --sdk_root="$SDK" \
+          "$MANAGER" \
+            --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
@@ -168,15 +232,21 @@ jobs:
       - name: Configure AndroidX
         shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_ROOT/android"
 
           touch gradle.properties
 
-          grep -q '^android.useAndroidX=true$' gradle.properties || \
-            echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q '^android.useAndroidX=true$' \
+            gradle.properties || \
+            echo 'android.useAndroidX=true' \
+            >> gradle.properties
 
-          grep -q '^android.enableJetifier=true$' gradle.properties || \
-            echo 'android.enableJetifier=true' >> gradle.properties
+          grep -q '^android.enableJetifier=true$' \
+            gradle.properties || \
+            echo 'android.enableJetifier=true' \
+            >> gradle.properties
 
       - name: Build APK
         shell: bash
