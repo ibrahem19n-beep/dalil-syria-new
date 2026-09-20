@@ -19,7 +19,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP=$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)
+          ZIP=$(find . -type f \
+            -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' \
+            -print -quit)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: V1.4 ZIP not found."
@@ -39,36 +41,29 @@ jobs:
 
           unzip -q "$ZIP" -d project
 
-          SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+          SETTINGS=$(find project -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: Android project not found."
             exit 1
           fi
 
-          ROOT=$(dirname "$SETTINGS")
+          PROJECT_ROOT=$(dirname "$SETTINGS")
 
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $PROJECT_ROOT"
 
-          echo "Project root: $ROOT"
-
-      - name: Verify bulk script location
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_ROOT"
-
-          echo "Checking correct bulk script..."
-
-          if [ ! -f "tools/build_bulk_places.py" ]; then
-            echo "ERROR: tools/build_bulk_places.py was not found."
-            echo "Available files:"
-            find . -maxdepth 4 -type f | sort | head -300
+          if [ ! -f "$PROJECT_ROOT/tools/build_bulk_places.py" ]; then
+            echo "ERROR: build_bulk_places.py not found at:"
+            echo "$PROJECT_ROOT/tools/build_bulk_places.py"
+            echo "Available tool files:"
+            find "$PROJECT_ROOT" -maxdepth 3 -type f | sort | head -200
             exit 1
           fi
 
-          echo "FOUND: tools/build_bulk_places.py"
+          echo "Bulk builder found correctly."
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -93,17 +88,15 @@ jobs:
           echo "Running bulk builder from:"
           pwd
 
-          echo "Running:"
-          echo "python tools/build_bulk_places.py --limit 10000"
+          echo "Using:"
+          ls -lh tools/build_bulk_places.py
 
           python tools/build_bulk_places.py --limit 10000
 
-          if [ ! -s "mobile_app/data/places.json" ]; then
+          if [ ! -s mobile_app/data/places.json ]; then
             echo "ERROR: places.json was not generated."
             exit 1
           fi
-
-          echo "Bulk dataset generated."
 
           python - <<'PY'
           import json
@@ -123,18 +116,18 @@ jobs:
           if len(ids) != len(set(ids)):
               raise SystemExit("ERROR: duplicate place IDs found.")
 
-          for x in data:
+          for i, x in enumerate(data, start=1):
               if "latitude" not in x or "longitude" not in x:
-                  raise SystemExit("ERROR: place missing coordinates.")
+                  raise SystemExit(f"ERROR: missing coordinates at record {i}")
 
               lat = float(x["latitude"])
               lon = float(x["longitude"])
 
               if not (-90 <= lat <= 90):
-                  raise SystemExit("ERROR: invalid latitude.")
+                  raise SystemExit(f"ERROR: invalid latitude at record {i}")
 
               if not (-180 <= lon <= 180):
-                  raise SystemExit("ERROR: invalid longitude.")
+                  raise SystemExit(f"ERROR: invalid longitude at record {i}")
 
           print("DATA_AUDIT_OK")
           PY
@@ -147,7 +140,6 @@ jobs:
           cd "$PROJECT_ROOT"
 
           rm -rf android/app/src/main/assets/mobile_app
-
           mkdir -p android/app/src/main/assets
 
           cp -a mobile_app android/app/src/main/assets/mobile_app
@@ -170,7 +162,11 @@ jobs:
           MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$MANAGER" ]; then
-            MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
+            MANAGER=$(find "$SDK/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -perm -111 \
+              | head -n 1)
           fi
 
           if [ -z "$MANAGER" ]; then
@@ -216,7 +212,7 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      - name: Collect APK
+      - name: Collect APK and dataset
         shell: bash
         run: |
           set -euo pipefail
@@ -239,8 +235,7 @@ jobs:
           cp "$PROJECT_ROOT/mobile_app/data/places.json" \
             apk-output/places.json
 
-          sha256sum apk-output/* \
-            > apk-output/SHA256SUMS.txt
+          sha256sum apk-output/* > apk-output/SHA256SUMS.txt
 
           echo "FINAL ARTIFACTS:"
           ls -lh apk-output
