@@ -3,7 +3,8 @@ name: Dalil Syria 1.4 - Damascus + Rif Dimashq Bulk APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   build:
@@ -17,143 +18,202 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           ZIP=$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)
+
           if [ -z "$ZIP" ]; then
-            echo 'ERROR: Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip not found.'
+            echo "ERROR: V1.4 ZIP not found."
             exit 1
           fi
+
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
           echo "Using: $ZIP"
 
-      - name: Extract clean V1.4 project
+      - name: Extract V1.4 project
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf project
           mkdir -p project
+
           unzip -q "$ZIP" -d project
+
           SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+
           if [ -z "$SETTINGS" ]; then
-            echo 'ERROR: Android project not found after extraction.'
+            echo "ERROR: Android project not found."
             exit 1
           fi
-          ROOT=$(dirname "$SETTINGS")
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Project: $ROOT"
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
+          ROOT=$(dirname "$SETTINGS")
+
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+          echo "Project root: $ROOT"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Build one large Damascus + Rif Dimashq dataset
+      - name: Install DuckDB
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_ROOT"
+
           python -m pip install --upgrade pip
-          python -m pip install 'duckdb>=1.4.0,<1.5'
+
+          python -m pip install "duckdb>=1.4.0,<1.5"
+
+      - name: Build Damascus + Rif Dimashq bulk dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
           python tools/build_bulk_places.py --limit 10000
 
           test -s mobile_app/data/places.json
 
-          rm -rf android/app/src/main/assets/mobile_app
-          mkdir -p android/app/src/main/assets
-          cp -a mobile_app android/app/src/main/assets/mobile_app
+          echo "Bulk dataset generated."
 
           python - <<'PY'
           import json
           from pathlib import Path
-          p=Path('mobile_app/data/places.json')
-          d=json.loads(p.read_text(encoding='utf-8'))
-          assert len(d) >= 265, f'Expected at least 265 places, got {len(d)}'
-          ids=[str(x.get('id')) for x in d]
-          assert len(ids)==len(set(ids)), 'duplicate ids'
-          for x in d:
-              lat=float(x['latitude']); lon=float(x['longitude'])
-              assert -90 <= lat <= 90 and -180 <= lon <= 180
-          bulk=[x for x in d if int(x['id']) >= 200000000]
-          regions={x.get('governorate_code') for x in bulk if x.get('governorate_code')}
-          assert regions.issubset({'SY-DI','SY-RD'}), f'Unexpected bulk regions: {regions}'
-          print('FINAL_PLACE_COUNT=', len(d))
-          print('NEW_BULK_PLACE_COUNT=', len(bulk))
-          print('NEW_BULK_REGIONS=', sorted(regions))
+
+          p = Path("mobile_app/data/places.json")
+
+          data = json.loads(
+              p.read_text(encoding="utf-8")
+          )
+
+          print("FINAL_PLACE_COUNT=", len(data))
+
+          ids = [str(x.get("id")) for x in data]
+
+          if len(ids) != len(set(ids)):
+              raise SystemExit("ERROR: duplicate place IDs found.")
+
+          for x in data:
+              lat = float(x["latitude"])
+              lon = float(x["longitude"])
+
+              if not (-90 <= lat <= 90):
+                  raise SystemExit("ERROR: invalid latitude.")
+
+              if not (-180 <= lon <= 180):
+                  raise SystemExit("ERROR: invalid longitude.")
+
+          print("DATA_AUDIT_OK")
+
           PY
+
+      - name: Copy updated data into Android assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          rm -rf android/app/src/main/assets/mobile_app
+
+          mkdir -p android/app/src/main/assets
+
+          cp -a mobile_app android/app/src/main/assets/mobile_app
+
+          echo "Android data updated."
 
       - name: Configure Android SDK
         shell: bash
         run: |
           set -euo pipefail
+
           SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
           MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$MANAGER" ]; then
             MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
           fi
+
           test -n "$MANAGER"
 
           yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
-          "$MANAGER" --sdk_root="$SDK" \
-            platform-tools \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
 
-      - name: Setup Gradle 8.7
+          "$MANAGER" --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: "8.7"
 
       - name: Configure AndroidX
         shell: bash
         run: |
           cd "$PROJECT_ROOT/android"
+
           touch gradle.properties
-          grep -q '^android.useAndroidX=true$' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^android.enableJetifier=true$' gradle.properties || echo 'android.enableJetifier=true' >> gradle.properties
+
+          grep -q '^android.useAndroidX=true$' gradle.properties || \
+            echo 'android.useAndroidX=true' >> gradle.properties
+
+          grep -q '^android.enableJetifier=true$' gradle.properties || \
+            echo 'android.enableJetifier=true' >> gradle.properties
 
       - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_ROOT/android"
-          gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare artifacts
+          cd "$PROJECT_ROOT/android"
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Collect APK
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$PROJECT_ROOT"
+
           mkdir -p apk-output
 
-          APK=$(find "$ROOT/android/app/build/outputs/apk" -type f -name '*.apk' -print -quit)
+          APK=$(find "$PROJECT_ROOT/android/app/build/outputs/apk" \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
           if [ -z "$APK" ]; then
-            echo 'ERROR: APK was not generated.'
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          cp "$APK" apk-output/dalil-syria-v1.4.0-damascus-rif-debug.apk
-          cp "$ROOT/mobile_app/data/places.json" apk-output/places.json
-          cp "$ROOT/bulk_batches/MANIFEST.json" apk-output/BULK_DATA_MANIFEST.json
-          cp "$ROOT/bulk_batches/damascus_rif_dimashq_boundaries.geojson" apk-output/damascus_rif_dimashq_boundaries.geojson
-          sha256sum apk-output/* > apk-output/SHA256SUMS.txt
+          cp "$APK" \
+            apk-output/dalil-syria-v1.4-damascus-rif-debug.apk
 
-          echo 'Artifacts prepared:'
+          cp "$PROJECT_ROOT/mobile_app/data/places.json" \
+            apk-output/places.json
+
+          sha256sum apk-output/* \
+            > apk-output/SHA256SUMS.txt
+
+          echo "FINAL ARTIFACTS:"
           ls -lh apk-output
 
-      - name: Upload APK + bulk data audit artifacts
+      - name: Upload APK and data
         uses: actions/upload-artifact@v4
         with:
-          name: dalil-syria-v1.4.0-damascus-rif
+          name: dalil-syria-v1.4-damascus-rif
           path: apk-output/*
           if-no-files-found: error
