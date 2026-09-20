@@ -1,4 +1,4 @@
-name: دليل سوريا 1.4 - دمشق + ريف دمشق Bulk APK
+name: Dalil Syria 1.4 - Damascus + Rif Dimashq Bulk APK
 
 on:
   workflow_dispatch:
@@ -11,190 +11,152 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: CHECKOUT
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: FIND AND EXTRACT V1.4
+      - name: Locate V1.4 ZIP
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
-          ZIP="$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)"
+          ZIP=$(find . -type f -name 'Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip' -print -quit)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: V1.4 ZIP NOT FOUND"
-            find . -maxdepth 4 -type f | sort
+            echo "ERROR: V1.4 ZIP not found."
             exit 1
           fi
 
-          echo "FOUND ZIP: $ZIP"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "Using ZIP: $ZIP"
+
+      - name: Extract V1.4 project
+        shell: bash
+        run: |
+          set -euo pipefail
 
           rm -rf project
           mkdir -p project
 
           unzip -q "$ZIP" -d project
 
-          echo "EXTRACTED FILES:"
-          find project -maxdepth 5 -type f | sort | head -300
-
-      - name: AUTO LOCATE BUILD SCRIPT
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          SCRIPT="$(find project -type f -name 'build_bulk_places.py' -print -quit)"
-
-          if [ -z "$SCRIPT" ]; then
-            echo "ERROR: build_bulk_places.py NOT FOUND ANYWHERE"
-            find project -type f | sort
-            exit 1
-          fi
-
-          SCRIPT_DIR="$(dirname "$SCRIPT")"
-
-          echo "BUILD SCRIPT FOUND:"
-          echo "$SCRIPT"
-
-          echo "SCRIPT DIRECTORY:"
-          echo "$SCRIPT_DIR"
-
-          echo "SCRIPT=$SCRIPT" >> "$GITHUB_ENV"
-          echo "SCRIPT_DIR=$SCRIPT_DIR" >> "$GITHUB_ENV"
-
-      - name: AUTO LOCATE ANDROID PROJECT
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          SETTINGS="$(find project -type f \( \
-            -name 'settings.gradle' -o \
-            -name 'settings.gradle.kts' \
-          \) -print -quit)"
+          SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Android settings file NOT FOUND"
-            find project -type f | sort
+            echo "ERROR: Android project not found inside ZIP."
             exit 1
           fi
 
-          ANDROID_ROOT="$(dirname "$SETTINGS")"
+          ROOT=$(dirname "$SETTINGS")
 
-          echo "ANDROID PROJECT:"
-          echo "$ANDROID_ROOT"
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-          echo "ANDROID_ROOT=$ANDROID_ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $ROOT"
 
-      - name: SETUP PYTHON
+      - name: Find bulk builder safely
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SCRIPT=$(find project -type f -path '*/tools/build_bulk_places.py' -print -quit)
+
+          if [ -z "$SCRIPT" ]; then
+            echo "ERROR: build_bulk_places.py was not found anywhere inside the V1.4 package."
+            echo "Files containing build_bulk_places:"
+            find project -type f -iname '*build*bulk*' -print || true
+            exit 1
+          fi
+
+          SCRIPT_DIR=$(dirname "$SCRIPT")
+          PROJECT_FROM_SCRIPT=$(dirname "$SCRIPT_DIR")
+
+          echo "BULK_SCRIPT=$SCRIPT" >> "$GITHUB_ENV"
+          echo "BULK_PROJECT_ROOT=$PROJECT_FROM_SCRIPT" >> "$GITHUB_ENV"
+
+          echo "Bulk builder found at: $SCRIPT"
+          echo "Bulk project root: $PROJECT_FROM_SCRIPT"
+
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: INSTALL PYTHON DEPENDENCIES
+      - name: Install Python dependencies
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
           python -m pip install --upgrade pip
+          python -m pip install "duckdb>=1.4.0,<1.5"
 
-          python -m pip install \
-            "duckdb>=1.4.0,<1.5" \
-            pandas \
-            pyarrow
-
-      - name: BUILD BULK DATA AUTO
+      - name: Build Damascus + Rif Dimashq bulk dataset
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
-          echo "RUNNING:"
-          echo "$SCRIPT"
+          cd "$BULK_PROJECT_ROOT"
 
-          cd "$SCRIPT_DIR"
+          echo "Running:"
+          echo "$BULK_SCRIPT"
 
-          python build_bulk_places.py --limit 10000
+          python "$BULK_SCRIPT" --limit 10000
 
-      - name: LOCATE GENERATED PLACES JSON
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          PLACES="$(find "$ANDROID_ROOT/.." -type f -path '*/mobile_app/data/places.json' -print -quit)"
-
-          if [ -z "$PLACES" ]; then
-            PLACES="$(find project -type f -name 'places.json' -print -quit)"
-          fi
-
-          if [ -z "$PLACES" ]; then
-            echo "ERROR: places.json NOT GENERATED"
-            find project -type f | sort
+          if [ ! -s mobile_app/data/places.json ]; then
+            echo "ERROR: places.json was not generated."
             exit 1
           fi
 
-          echo "PLACES FILE:"
-          echo "$PLACES"
-
-          echo "PLACES=$PLACES" >> "$GITHUB_ENV"
-
-      - name: AUDIT DATA
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          python - "$PLACES" <<'PY'
+          python - <<'PY'
           import json
-          import sys
+          from pathlib import Path
 
-          path = sys.argv[1]
+          p = Path("mobile_app/data/places.json")
 
-          with open(path, "r", encoding="utf-8") as f:
-              data = json.load(f)
+          data = json.loads(p.read_text(encoding="utf-8"))
 
           if not isinstance(data, list):
-              raise SystemExit("ERROR: places.json is not a list")
+              raise SystemExit("ERROR: places.json is not a list.")
 
-          print("FINAL_PLACE_COUNT =", len(data))
-
-          if len(data) == 0:
-              raise SystemExit("ERROR: ZERO PLACES")
+          print("FINAL_PLACE_COUNT=", len(data))
 
           ids = [str(x.get("id")) for x in data]
 
           if len(ids) != len(set(ids)):
-              raise SystemExit("ERROR: DUPLICATE IDS")
+              raise SystemExit("ERROR: duplicate place IDs found.")
 
           for x in data:
-              float(x["latitude"])
-              float(x["longitude"])
+              if "latitude" not in x or "longitude" not in x:
+                  raise SystemExit("ERROR: place is missing coordinates.")
+
+              lat = float(x["latitude"])
+              lon = float(x["longitude"])
+
+              if not (-90 <= lat <= 90):
+                  raise SystemExit("ERROR: invalid latitude.")
+
+              if not (-180 <= lon <= 180):
+                  raise SystemExit("ERROR: invalid longitude.")
 
           print("DATA_AUDIT_OK")
           PY
 
-      - name: COPY DATA INTO ANDROID ASSETS
+      - name: Copy updated mobile data into Android
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
-          MOBILE="$(dirname "$(dirname "$PLACES")")"
+          cd "$BULK_PROJECT_ROOT"
 
-          if [ ! -d "$MOBILE" ]; then
-            echo "ERROR: mobile_app directory not found"
-            exit 1
-          fi
+          rm -rf android/app/src/main/assets/mobile_app
+          mkdir -p android/app/src/main/assets
 
-          rm -rf "$ANDROID_ROOT/app/src/main/assets/mobile_app"
+          cp -a mobile_app android/app/src/main/assets/mobile_app
 
-          mkdir -p "$ANDROID_ROOT/app/src/main/assets"
+          echo "Android assets updated."
 
-          cp -a "$MOBILE" \
-            "$ANDROID_ROOT/app/src/main/assets/mobile_app"
-
-          echo "ANDROID ASSETS UPDATED"
-
-      - name: CONFIGURE ANDROID SDK
+      - name: Configure Android SDK
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
           SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
 
@@ -207,36 +169,29 @@ jobs:
           MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$MANAGER" ]; then
-            MANAGER="$(find "$SDK/cmdline-tools" \
-              -type f \
-              -name sdkmanager \
-              -perm -111 \
-              -print -quit)"
+            MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
           fi
 
           test -n "$MANAGER"
 
-          yes | "$MANAGER" \
-            --sdk_root="$SDK" \
-            --licenses || true
+          yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
 
-          "$MANAGER" \
-            --sdk_root="$SDK" \
+          "$MANAGER" --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: SETUP GRADLE
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: CONFIGURE ANDROIDX
+      - name: Configure AndroidX
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
-          cd "$ANDROID_ROOT"
+          cd "$BULK_PROJECT_ROOT/android"
 
           touch gradle.properties
 
@@ -246,50 +201,46 @@ jobs:
           grep -q '^android.enableJetifier=true$' gradle.properties || \
             echo 'android.enableJetifier=true' >> gradle.properties
 
-      - name: BUILD APK
+      - name: Build APK
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
-          cd "$ANDROID_ROOT"
+          cd "$BULK_PROJECT_ROOT/android"
 
           gradle assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: COLLECT RESULTS
+      - name: Collect APK and dataset
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
           mkdir -p apk-output
 
-          APK="$(find "$ANDROID_ROOT/app/build/outputs/apk" \
+          APK=$(find "$BULK_PROJECT_ROOT/android/app/build/outputs/apk" \
             -type f \
-            -name '*.apk' \
-            -print -quit)"
+            -name "*.apk" \
+            -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK NOT GENERATED"
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
           cp "$APK" \
             apk-output/dalil-syria-v1.4-damascus-rif-debug.apk
 
-          cp "$PLACES" \
+          cp "$BULK_PROJECT_ROOT/mobile_app/data/places.json" \
             apk-output/places.json
 
-          sha256sum apk-output/* \
-            > apk-output/SHA256SUMS.txt
+          sha256sum apk-output/* > apk-output/SHA256SUMS.txt
 
-          echo "================================"
-          echo "BUILD SUCCESS"
-          echo "================================"
-
+          echo "FINAL ARTIFACTS:"
           ls -lh apk-output
 
-      - name: UPLOAD RESULTS
+      - name: Upload APK and data
         uses: actions/upload-artifact@v4
         with:
           name: dalil-syria-v1.4-damascus-rif
