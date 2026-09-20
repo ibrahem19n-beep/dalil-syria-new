@@ -27,7 +27,7 @@ jobs:
           fi
 
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-          echo "Using: $ZIP"
+          echo "Using ZIP: $ZIP"
 
       - name: Extract V1.4 project
         shell: bash
@@ -49,14 +49,33 @@ jobs:
           ROOT=$(dirname "$SETTINGS")
 
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+
           echo "Project root: $ROOT"
+
+      - name: Verify bulk script location
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_ROOT"
+
+          echo "Checking correct bulk script..."
+
+          if [ ! -f "tools/build_bulk_places.py" ]; then
+            echo "ERROR: tools/build_bulk_places.py was not found."
+            echo "Available files:"
+            find . -maxdepth 4 -type f | sort | head -300
+            exit 1
+          fi
+
+          echo "FOUND: tools/build_bulk_places.py"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install DuckDB
+      - name: Install Python dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -71,9 +90,18 @@ jobs:
 
           cd "$PROJECT_ROOT"
 
+          echo "Running bulk builder from:"
+          pwd
+
+          echo "Running:"
+          echo "python tools/build_bulk_places.py --limit 10000"
+
           python tools/build_bulk_places.py --limit 10000
 
-          test -s mobile_app/data/places.json
+          if [ ! -s "mobile_app/data/places.json" ]; then
+            echo "ERROR: places.json was not generated."
+            exit 1
+          fi
 
           echo "Bulk dataset generated."
 
@@ -83,9 +111,10 @@ jobs:
 
           p = Path("mobile_app/data/places.json")
 
-          data = json.loads(
-              p.read_text(encoding="utf-8")
-          )
+          data = json.loads(p.read_text(encoding="utf-8"))
+
+          if not isinstance(data, list):
+              raise SystemExit("ERROR: places.json is not a list.")
 
           print("FINAL_PLACE_COUNT=", len(data))
 
@@ -95,6 +124,9 @@ jobs:
               raise SystemExit("ERROR: duplicate place IDs found.")
 
           for x in data:
+              if "latitude" not in x or "longitude" not in x:
+                  raise SystemExit("ERROR: place missing coordinates.")
+
               lat = float(x["latitude"])
               lon = float(x["longitude"])
 
@@ -120,7 +152,7 @@ jobs:
 
           cp -a mobile_app android/app/src/main/assets/mobile_app
 
-          echo "Android data updated."
+          echo "Android assets updated."
 
       - name: Configure Android SDK
         shell: bash
@@ -141,7 +173,10 @@ jobs:
             MANAGER=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -n 1)
           fi
 
-          test -n "$MANAGER"
+          if [ -z "$MANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
 
           yes | "$MANAGER" --sdk_root="$SDK" --licenses || true
 
@@ -158,6 +193,8 @@ jobs:
       - name: Configure AndroidX
         shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_ROOT/android"
 
           touch gradle.properties
