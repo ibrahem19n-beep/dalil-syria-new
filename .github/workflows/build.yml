@@ -18,8 +18,10 @@ jobs:
           set -e
           rm -rf v14 clean
           mkdir -p v14 clean
+
           unzip -q .github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip -d v14
           unzip -q Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip -d clean
+
           echo "V14_ROOT=$(dirname "$(find v14 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)")" >> "$GITHUB_ENV"
           echo "CLEAN_MOBILE=$(find clean -type d -path '*/mobile_app' -print -quit)" >> "$GITHUB_ENV"
 
@@ -41,7 +43,9 @@ jobs:
         shell: bash
         run: |
           set -e
+
           cd "$V14_ROOT"
+
           SCRIPT=$(find "$GITHUB_WORKSPACE/v14" -type f -name 'build_bulk_places.py' -print -quit || true)
 
           if [ -n "$SCRIPT" ]; then
@@ -49,14 +53,18 @@ jobs:
             python "$SCRIPT" --limit 100000
           else
             echo "Builder script not included; using existing places.json."
+
             SRC=$(find "$V14_ROOT" -type f -path '*/mobile_app/data/places.json' -print -quit || true)
+
             if [ -z "$SRC" ]; then
               SRC=$(find "$V14_ROOT" -type f -name 'places.json' -print -quit || true)
             fi
+
             if [ -z "$SRC" ]; then
               echo "ERROR: no places.json found."
               exit 1
             fi
+
             mkdir -p mobile_app/data
             cp "$SRC" mobile_app/data/places.json
           fi
@@ -159,49 +167,47 @@ jobs:
         run: |
           set -e
 
+          APP="$GITHUB_WORKSPACE/$V14_ROOT/mobile_app"
+          MAP_DIR="$RUNNER_TEMP/maplibre"
+
           rm -rf "$V14_ROOT/mobile_app"
           cp -a "$CLEAN_MOBILE" "$V14_ROOT/mobile_app"
 
-          
-
           cp "$GITHUB_WORKSPACE/places.json" \
-             "$V14_ROOT/mobile_app/data/places.json"
+             "$APP/data/places.json"
 
           cp "$GITHUB_WORKSPACE/places_audit.json" \
-             "$V14_ROOT/mobile_app/data/places_audit.json"
+             "$APP/data/places_audit.json"
 
-          cd "$RUNNER_TEMP"
-          rm -rf maplibre
-          mkdir maplibre
-          cd maplibre
+          rm -rf "$MAP_DIR"
+          mkdir -p "$MAP_DIR"
+          cd "$MAP_DIR"
 
           npm init -y >/dev/null 2>&1
           npm install --silent maplibre-gl@4.7.1
 
-          MAP_JS=$(find node_modules/maplibre-gl -type f \
+          MAP_JS=$(find "$MAP_DIR/node_modules/maplibre-gl" -type f \
             \( -name 'maplibre-gl.js' -o -name 'maplibre-gl.min.js' \) \
             -print -quit)
 
-          MAP_CSS=$(find node_modules/maplibre-gl -type f \
+          MAP_CSS=$(find "$MAP_DIR/node_modules/maplibre-gl" -type f \
             -name 'maplibre-gl.css' \
             -print -quit)
 
           test -n "$MAP_JS"
           test -n "$MAP_CSS"
-          cd "$GITHUB_WORKSPACE"
-          mkdir -p "$V14_ROOT/mobile_app/vendor"
 
-          cp "$MAP_JS" \
-             "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
+          mkdir -p "$APP/vendor"
 
-          cp "$MAP_CSS" \
-             "$V14_ROOT/mobile_app/vendor/maplibre-gl.css"
+          cp "$MAP_JS" "$APP/vendor/maplibre-gl.js"
+          cp "$MAP_CSS" "$APP/vendor/maplibre-gl.css"
 
-          cp "$V14_ROOT/mobile_app/data/places.json" \
+          cp "$APP/data/places.json" \
              "$GITHUB_WORKSPACE/places.json"
 
-          cp "$V14_ROOT/mobile_app/data/places_audit.json" \
+          cp "$APP/data/places_audit.json" \
              "$GITHUB_WORKSPACE/places_audit.json"
+
       - name: Add real app layer
         shell: bash
         run: |
