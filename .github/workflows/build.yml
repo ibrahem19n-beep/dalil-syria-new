@@ -65,7 +65,7 @@ jobs:
         run: |
           set -e
 
-          SCRIPT=$(find "$V14_ROOT" -type f -path '*/tools/build_bulk_places.py' -print -quit)
+          SCRIPT=$(find v14 -type f -path '*/tools/build_bulk_places.py' -print -quit)
 
           if [ -z "$SCRIPT" ]; then
             echo "Bulk builder not found"
