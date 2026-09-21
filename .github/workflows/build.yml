@@ -188,6 +188,7 @@ jobs:
 
           test -n "$MAP_JS"
           test -n "$MAP_CSS"
+          cd "$GITHUB_WORKSPACE"
           mkdir -p "$V14_ROOT/mobile_app/vendor"
 
           cp "$MAP_JS" \
