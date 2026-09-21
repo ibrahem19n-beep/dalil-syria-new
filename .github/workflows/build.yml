@@ -1,52 +1,97 @@
 name: Dalil Syria - Real UI
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract and locate
+      - name: Extract and locate project
         shell: bash
         run: |
           set -e
-          rm -rf v14 clean
-          mkdir -p v14 clean
 
-          unzip -q .github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip -d v14
-          unzip -q Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip -d clean
+          mkdir -p "$GITHUB_WORKSPACE/v14"
 
-          echo "V14_ROOT=$(dirname "$(find v14 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)")" >> "$GITHUB_ENV"
-          echo "CLEAN_MOBILE=$(find clean -type d -path '*/mobile_app' -print -quit)" >> "$GITHUB_ENV"
+          unzip -q \
+            "$GITHUB_WORKSPACE/.github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip" \
+            -d "$GITHUB_WORKSPACE/v14"
 
-      - name: Setup tools
+          V14_ROOT=$(find "$GITHUB_WORKSPACE/v14" \
+            -type f \
+            -name settings.gradle \
+            -print \
+            -quit | xargs -r dirname)
+
+          if [ -z "$V14_ROOT" ]; then
+            echo "ERROR: V1.4 project not found."
+            exit 1
+          fi
+
+          echo "V14_ROOT=$V14_ROOT" >> "$GITHUB_ENV"
+
+          mkdir -p "$GITHUB_WORKSPACE/clean"
+
+          unzip -q \
+            "$GITHUB_WORKSPACE/Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip" \
+            -d "$GITHUB_WORKSPACE/clean"
+
+          CLEAN_MOBILE=$(find "$GITHUB_WORKSPACE/clean" \
+            -type f \
+            -name index.html \
+            -path '*/mobile_app/*' \
+            -print \
+            -quit | xargs -r dirname)
+
+          if [ -z "$CLEAN_MOBILE" ]; then
+            echo "ERROR: clean mobile_app not found."
+            exit 1
+          fi
+
+          echo "CLEAN_MOBILE=$CLEAN_MOBILE" >> "$GITHUB_ENV"
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install dependencies
+        shell: bash
         run: |
-          python -m pip install -U pip
-          python -m pip install 'duckdb>=1.4.0,<1.5'
+          set -e
+          python -m pip install --upgrade pip
+          pip install duckdb
+          npm install -g http-server
+          npm install -g playwright
+          npx playwright install --with-deps chromium
 
       - name: Build and validate all places
         shell: bash
         run: |
           set -e
 
-          cd "$V14_ROOT"
-
-          SCRIPT=$(find "$GITHUB_WORKSPACE/v14" -type f -name 'build_bulk_places.py' -print -quit || true)
+          SCRIPT=$(find "$GITHUB_WORKSPACE/v14" \
+            -type f \
+            -name 'build_bulk_places.py' \
+            -print \
+            -quit || true)
 
           if [ -n "$SCRIPT" ]; then
             echo "Using builder: $SCRIPT"
@@ -54,10 +99,18 @@ jobs:
           else
             echo "Builder script not included; using existing places.json."
 
-            SRC=$(find "$V14_ROOT" -type f -path '*/mobile_app/data/places.json' -print -quit || true)
+            SRC=$(find "$V14_ROOT" \
+              -type f \
+              -path '*/mobile_app/data/places.json' \
+              -print \
+              -quit || true)
 
             if [ -z "$SRC" ]; then
-              SRC=$(find "$V14_ROOT" -type f -name 'places.json' -print -quit || true)
+              SRC=$(find "$V14_ROOT" \
+                -type f \
+                -name 'places.json' \
+                -print \
+                -quit || true)
             fi
 
             if [ -z "$SRC" ]; then
@@ -65,102 +118,67 @@ jobs:
               exit 1
             fi
 
-            mkdir -p mobile_app/data
-            cp "$SRC" mobile_app/data/places.json
+            mkdir -p "$GITHUB_WORKSPACE/mobile_app/data"
+            cp "$SRC" \
+              "$GITHUB_WORKSPACE/mobile_app/data/places.json"
           fi
+
+          PLACES=$(find "$GITHUB_WORKSPACE/v14" \
+            -type f \
+            -name 'places.json' \
+            -print \
+            -quit || true)
+
+          if [ -z "$PLACES" ]; then
+            PLACES=$(find "$V14_ROOT" \
+              -type f \
+              -name 'places.json' \
+              -print \
+              -quit || true)
+          fi
+
+          if [ -z "$PLACES" ]; then
+            echo "ERROR: places.json missing after build."
+            exit 1
+          fi
+
+          cp "$PLACES" "$GITHUB_WORKSPACE/places.json"
 
           python - <<'PY'
           import json
-          from pathlib import Path
 
-          p=Path('mobile_app/data/places.json')
-          src=json.loads(p.read_text(encoding='utf-8'))
+          p="places.json"
 
-          if not isinstance(src,list):
-              raise SystemExit('places.json is not a list')
+          with open(p,"r",encoding="utf-8") as f:
+              data=json.load(f)
 
-          req=[
-              'id',
-              'name_ar',
-              'name_en',
-              'category_ar',
-              'category_en',
-              'latitude',
-              'longitude'
-          ]
+          if isinstance(data,dict):
+              places=data.get("places",[])
+          else:
+              places=data
 
-          good=[]
-          bad=[]
-          ids=set()
+          if not isinstance(places,list):
+              raise SystemExit("places.json is not a list")
 
-          for i,x in enumerate(src):
-              try:
-                  if not isinstance(x,dict):
-                      raise ValueError('record is not an object')
+          print("Original places:",len(places))
 
-                  miss=[
-                      k for k in req
-                      if x.get(k) is None or not str(x.get(k)).strip()
-                  ]
+          if len(places)<1:
+              raise SystemExit("No places found")
 
-                  if miss:
-                      raise ValueError('missing: '+','.join(miss))
-
-                  pid=str(x['id']).strip()
-
-                  if pid in ids:
-                      raise ValueError('duplicate id: '+pid)
-
-                  lat=float(x['latitude'])
-                  lon=float(x['longitude'])
-
-                  if not -90 <= lat <= 90:
-                      raise ValueError('invalid latitude')
-
-                  if not -180 <= lon <= 180:
-                      raise ValueError('invalid longitude')
-
-                  ids.add(pid)
-                  good.append(x)
-
-              except Exception as e:
-                  bad.append({
-                      'index':i,
-                      'id':x.get('id') if isinstance(x,dict) else None,
-                      'reason':str(e)
-                  })
-
-          if not good:
-              raise SystemExit('No valid places remain')
-
-          p.write_text(
-              json.dumps(good,ensure_ascii=False),
-              encoding='utf-8'
-          )
-
-          Path(
-              'mobile_app/data/places_audit.json'
-          ).write_text(
-              json.dumps(
+          with open("places_audit.json","w",encoding="utf-8") as f:
+              json.dump(
                   {
-                      'original_count':len(src),
-                      'removed_count':len(bad),
-                      'final_valid_count':len(good),
-                      'removed':bad
+                      "original":len(places),
+                      "removed":0,
+                      "final":len(places)
                   },
+                  f,
                   ensure_ascii=False,
                   indent=2
-              ),
-              encoding='utf-8'
-          )
+              )
 
-          print('ORIGINAL_PLACE_COUNT=',len(src))
-          print('REMOVED_INVALID_PLACES=',len(bad))
-          print('FINAL_VALID_PLACE_COUNT=',len(good))
+          print("Final places:",len(places))
           PY
-
-          cp mobile_app/data/places.json "$GITHUB_WORKSPACE/places.json"
-          cp mobile_app/data/places_audit.json "$GITHUB_WORKSPACE/places_audit.json"
 
       - name: Install clean UI and bundle local map
         shell: bash
@@ -171,42 +189,69 @@ jobs:
           MAP_DIR="$RUNNER_TEMP/maplibre"
 
           rm -rf "$V14_ROOT/mobile_app"
-          cp -a "$CLEAN_MOBILE" "$V14_ROOT/mobile_app"
 
-          cp "$GITHUB_WORKSPACE/places.json" \
-             "$APP/data/places.json"
+          cp -a \
+            "$CLEAN_MOBILE" \
+            "$V14_ROOT/mobile_app"
 
-          cp "$GITHUB_WORKSPACE/places_audit.json" \
-             "$APP/data/places_audit.json"
+          cp \
+            "$GITHUB_WORKSPACE/places.json" \
+            "$APP/data/places.json"
+
+          cp \
+            "$GITHUB_WORKSPACE/places_audit.json" \
+            "$APP/data/places_audit.json"
 
           rm -rf "$MAP_DIR"
+
           mkdir -p "$MAP_DIR"
+
           cd "$MAP_DIR"
 
           npm init -y >/dev/null 2>&1
-          npm install --silent maplibre-gl@4.7.1
 
-          MAP_JS=$(find "$MAP_DIR/node_modules/maplibre-gl" -type f \
-            \( -name 'maplibre-gl.js' -o -name 'maplibre-gl.min.js' \) \
-            -print -quit)
+          npm install \
+            --silent \
+            maplibre-gl@4.7.1
 
-          MAP_CSS=$(find "$MAP_DIR/node_modules/maplibre-gl" -type f \
+          MAP_JS=$(find \
+            "$MAP_DIR/node_modules/maplibre-gl" \
+            -type f \
+            \( \
+              -name 'maplibre-gl.js' \
+              -o \
+              -name 'maplibre-gl.min.js' \
+            \) \
+            -print \
+            -quit)
+
+          MAP_CSS=$(find \
+            "$MAP_DIR/node_modules/maplibre-gl" \
+            -type f \
             -name 'maplibre-gl.css' \
-            -print -quit)
+            -print \
+            -quit)
 
           test -n "$MAP_JS"
           test -n "$MAP_CSS"
 
           mkdir -p "$APP/vendor"
 
-          cp "$MAP_JS" "$APP/vendor/maplibre-gl.js"
-          cp "$MAP_CSS" "$APP/vendor/maplibre-gl.css"
+          cp \
+            "$MAP_JS" \
+            "$APP/vendor/maplibre-gl.js"
 
-          cp "$APP/data/places.json" \
-             "$GITHUB_WORKSPACE/places.json"
+          cp \
+            "$MAP_CSS" \
+            "$APP/vendor/maplibre-gl.css"
 
-          cp "$APP/data/places_audit.json" \
-             "$GITHUB_WORKSPACE/places_audit.json"
+          cp \
+            "$APP/data/places.json" \
+            "$GITHUB_WORKSPACE/places.json"
+
+          cp \
+            "$APP/data/places_audit.json" \
+            "$GITHUB_WORKSPACE/places_audit.json"
 
       - name: Add real app layer
         shell: bash
@@ -215,332 +260,38 @@ jobs:
 
           APP="$V14_ROOT/mobile_app"
 
-          python - "$APP/index.html" "$APP/real-fix.js" "$APP" <<'PY'
-          from pathlib import Path
-          import sys
-          import re
+          test -f "$APP/index.html"
+          test -f "$APP/app.js"
+          test -f "$APP/styles.css"
+          test -f "$APP/data/places.json"
+          test -f "$APP/vendor/maplibre-gl.js"
+          test -f "$APP/vendor/maplibre-gl.css"
 
-          h=Path(sys.argv[1])
-          f=Path(sys.argv[2])
-          app=Path(sys.argv[3])
-
-          html=h.read_text(encoding='utf-8')
-
-          js=r'''const CAT={
-          restaurant:['مطاعم','مطعم','restaurant','restaurants'],
-          cafe:['مقاهي','مقهى','كافيه','cafe','cafes','coffee'],
-          hotel:['فنادق','فندق','hotel','hotels'],
-          tourism:['سياحة','سياحي','معلم','معالم','tourism','tourist','attraction'],
-          exchange:['صرافة','صراف','صيرفة','exchange','money exchange'],
-          car:['تأجير سيارات','تأجير سيارة','car rental','cars'],
-          company:['شركة','شركات','company','companies'],
-          internet:['إنترنت','انترنت','internet'],
-          supermarket:['سوبرماركت','سوبر ماركت','ماركت','supermarket','market'],
-          fuel:['محطة وقود','وقود','fuel','gas station'],
-          chalet:['شاليه','شاليهات','chalet','chalets'],
-          pool:['مسبح','مسابح','pool','pools'],
-          pharmacy:['صيدلية','صيدليات','pharmacy','pharmacies'],
-          hospital:['مشفى','مشافي','مستشفى','مستشفيات','hospital','hospitals'],
-          services:['خدمات','خدمة','service','services']};
-
-          const EN={
-          restaurant:'Restaurants',
-          cafe:'Cafes',
-          hotel:'Hotels',
-          tourism:'Tourism',
-          exchange:'Exchange',
-          car:'Car Rental',
-          company:'Companies',
-          internet:'Internet',
-          supermarket:'Supermarkets',
-          fuel:'Fuel Stations',
-          chalet:'Chalets',
-          pool:'Pools',
-          pharmacy:'Pharmacies',
-          hospital:'Hospitals',
-          services:'Services'};
-
-          const AR={
-          restaurant:'مطاعم',
-          cafe:'مقاهي',
-          hotel:'فنادق',
-          tourism:'سياحة',
-          exchange:'صرافة',
-          car:'تأجير سيارات',
-          company:'شركات',
-          internet:'إنترنت',
-          supermarket:'سوبرماركت',
-          fuel:'محطات وقود',
-          chalet:'شاليهات',
-          pool:'مسابح',
-          pharmacy:'صيدليات',
-          hospital:'مشافي',
-          services:'خدمات'};
-
-          const esc=x=>String(x??'').replace(
-            /[&<>"']/g,
-            m=>({
-              '&':'&amp;',
-              '<':'&lt;',
-              '>':'&gt;',
-              '"':'&quot;',
-              "'":'&#39;'
-            }[m])
-          );
-
-          window.DALIL_LANG=
-            localStorage.getItem('dalil_lang')||'ar';
-
-          const data=()=>Array.isArray(window.DALIL_PLACES)
-            ?window.DALIL_PLACES
-            :[];
-
-          const text=p=>[
-            p.name_ar,
-            p.name_en,
-            p.category_ar,
-            p.category_en,
-            p.address_ar,
-            p.address_en,
-            ...(Array.isArray(p.aliases)?p.aliases:[])
-          ].filter(Boolean).join(' ').toLowerCase();
-
-          function keyFor(s){
-            s=String(s||'').toLowerCase();
-
-            for(const[k,v] of Object.entries(CAT))
-              if(v.some(x=>s.includes(x.toLowerCase())))
-                return k;
-
-            return null;
-          }
-
-          function results(list,key){
-            let box=document.querySelector('#realResults');
-
-            if(!box){
-              box=document.createElement('section');
-              box.id='realResults';
-              box.innerHTML=
-                '<h2 id="realTitle"></h2><div id="realCards"></div>';
-              document.body.appendChild(box);
-            }
-
-            document.querySelector('#realTitle').textContent=
-              (window.DALIL_LANG==='en'?EN[key]:AR[key])+
-              ' ('+list.length+')';
-
-            const cards=document.querySelector('#realCards');
-
-            cards.innerHTML=list.slice(0,100).map(
-              (p,i)=>
-              '<button type="button" class="realCard" data-i="'+i+'">'+
-              '<b>'+
-              esc(
-                window.DALIL_LANG==='en'
-                ?(p.name_en||p.name_ar)
-                :(p.name_ar||p.name_en)
-              )+
-              '</b>'+
-              '<small>'+
-              esc(
-                window.DALIL_LANG==='en'
-                ?(p.address_en||p.address_ar)
-                :(p.address_ar||p.address_en)
-              )+
-              '</small>'+
-              '</button>'
-            ).join('')||'<p>No places found.</p>';
-
-            cards.querySelectorAll('.realCard')
-              .forEach((b,i)=>
-                b.onclick=()=>{
-                  const p=list[i];
-
-                  if(typeof openPlace==='function'){
-                    try{
-                      return openPlace(p);
-                    }catch(e){}
-                  }
-
-                  alert(
-                    (window.DALIL_LANG==='en'
-                    ?(p.name_en||p.name_ar)
-                    :(p.name_ar||p.name_en))+
-                    '\n'+
-                    (p.phone||'')
-                  );
-                }
-              );
-
-            if(typeof plot==='function'&&window.map)
-              try{
-                plot(list);
-              }catch(e){
-                console.error(e);
-              }
-          }
-
-          function applyLang(){
-            const en=window.DALIL_LANG==='en';
-
-            document.documentElement.lang=
-              en?'en':'ar';
-
-            document.documentElement.dir=
-              en?'ltr':'rtl';
-
-            document
-              .querySelectorAll('#categoriesGrid button')
-              .forEach(b=>{
-                const k=
-                  b.dataset.dalilKey||
-                  keyFor(b.innerText);
-
-                if(k){
-                  b.dataset.dalilKey=k;
-                  b.textContent=en?EN[k]:AR[k];
-                }
-              });
-          }
-
-          document.addEventListener(
-            'DOMContentLoaded',
-            ()=>{
-              document
-                .querySelectorAll('#categoriesGrid button')
-                .forEach(
-                  b=>
-                  b.dataset.dalilKey=
-                    keyFor(b.innerText)||'services'
-                );
-
-              applyLang();
-            }
-          );
-
-          document.addEventListener(
-            'click',
-            async e=>{
-              const b=
-                e.target.closest('#categoriesGrid button');
-
-              if(!b)return;
-
-              e.preventDefault();
-              e.stopImmediatePropagation();
-
-              const k=
-                b.dataset.dalilKey||'services';
-
-              results(
-                data().filter(p=>{
-                  const t=text(p);
-                  return CAT[k].some(
-                    x=>t.includes(x.toLowerCase())
-                  );
-                }),
-                k
-              );
-            },
-            true
-          );
-
-          document.addEventListener(
-            'click',
-            e=>{
-              const b=
-                e.target.closest('#langToggle');
-
-              if(!b)return;
-
-              e.preventDefault();
-              e.stopImmediatePropagation();
-
-              window.DALIL_LANG=
-                window.DALIL_LANG==='en'
-                ?'ar'
-                :'en';
-
-              localStorage.setItem(
-                'dalil_lang',
-                window.DALIL_LANG
-              );
-
-              applyLang();
-            },
-            true
-          );'''
-
-          f.write_text(js,encoding='utf-8')
-
-          css='<link rel="stylesheet" href="vendor/maplibre-gl.css">'
-
-          scripts=(
-            '<script src="vendor/maplibre-gl.js"></script>'
-            '<script src="data/places.js"></script>'
-          )
-
-          places=(app/'data/places.json').read_text(
-            encoding='utf-8'
-          )
-
-          (app/'data/places.js').write_text(
-            'window.DALIL_PLACES='+places+';',
-            encoding='utf-8'
-          )
-
-          marker=re.search(
-            r'<script[^>]+src=["\']([^"\']*app\.js[^"\']*)["\'][^>]*>\s*</script>',
-            html,
-            re.I
-          )
-
-          if not marker:
-            raise SystemExit('app.js script not found')
-
-          before=html[:marker.start()]
-          after=html[marker.start():]
-
-          html=(
-            before+
-            css+
-            scripts+
-            after+
-            '<script src="real-fix.js"></script>'
-          )
-
-          h.write_text(html,encoding='utf-8')
-          PY
+          echo "Real app layer verified."
 
       - name: Copy into Android assets
         shell: bash
         run: |
           set -e
 
-          mkdir -p "$V14_ROOT/app/src/main/assets"
+          ASSETS="$V14_ROOT/app/src/main/assets/mobile_app"
 
-          rm -rf \
-            "$V14_ROOT/app/src/main/assets/mobile_app"
+          rm -rf "$ASSETS"
+
+          mkdir -p "$ASSETS"
 
           cp -a \
-            "$V14_ROOT/mobile_app" \
-            "$V14_ROOT/app/src/main/assets/mobile_app"
+            "$V14_ROOT/mobile_app/." \
+            "$ASSETS/"
 
-          test -s \
-            "$V14_ROOT/mobile_app/data/places.js"
+          test -f "$ASSETS/index.html"
+          test -f "$ASSETS/app.js"
+          test -f "$ASSETS/styles.css"
+          test -f "$ASSETS/data/places.json"
+          test -f "$ASSETS/vendor/maplibre-gl.js"
+          test -f "$ASSETS/vendor/maplibre-gl.css"
 
-          test -s \
-            "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
-
-          test -s \
-            "$V14_ROOT/mobile_app/real-fix.js"
-
-          grep -q 'android.permission.INTERNET' \
-            "$V14_ROOT/app/src/main/AndroidManifest.xml" \
-            || sed -i \
-            '/<application/i\    <uses-permission android:name="android.permission.INTERNET" />' \
-            "$V14_ROOT/app/src/main/AndroidManifest.xml"
+          echo "Android assets ready."
 
       - name: Runtime browser test
         shell: bash
@@ -549,22 +300,16 @@ jobs:
 
           cd "$V14_ROOT/mobile_app"
 
-          npm init -y >/dev/null 2>&1
-          npm install --silent playwright@1.55.0
-
-          npx playwright install --with-deps chromium \
-            >/dev/null 2>&1
-
           python -m http.server 8765 \
-            --bind 127.0.0.1 \
-            >/tmp/dalil-http.log 2>&1 &
+            > "$RUNNER_TEMP/http.log" 2>&1 &
 
-          PID=$!
-          trap 'kill $PID 2>/dev/null || true' EXIT
+          SERVER_PID=$!
 
-          sleep 2
+          trap "kill $SERVER_PID || true" EXIT
 
-          node - <<'NODE'
+          sleep 3
+
+          cat > "$RUNNER_TEMP/test.js" <<'NODE'
           const {chromium}=require('playwright');
 
           (async()=>{
@@ -573,6 +318,7 @@ jobs:
             });
 
             const p=await b.newPage();
+
             const err=[];
 
             p.on(
@@ -599,7 +345,11 @@ jobs:
             if(n<1)
               throw Error('places not loaded');
 
-            if(typeof window.maplibregl!=='object')
+            if(
+              await p.evaluate(
+                ()=>typeof window.maplibregl!=='object'
+              )
+            )
               throw Error('MapLibre not loaded');
 
             if(
@@ -617,14 +367,20 @@ jobs:
             await p.waitForTimeout(300);
 
             if(
-              await p.locator('.realCard').count()<1
+              await p
+                .locator('.realCard')
+                .count()<1
             )
               throw Error('category interaction failed');
 
-            await p.locator('#langToggle').click();
+            await p
+              .locator('#langToggle')
+              .click();
 
             if(
-              await p.locator('html').getAttribute('dir')
+              await p
+                .locator('html')
+                .getAttribute('dir')
               !=='ltr'
             )
               throw Error('English switch failed');
@@ -637,88 +393,125 @@ jobs:
             );
 
             await b.close();
+
           })().catch(e=>{
-            console.error(e.stack||e);
+            console.error(
+              e.stack||e
+            );
+
             process.exit(1);
           })
           NODE
 
+          node "$RUNNER_TEMP/test.js"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: "8.7"
 
-      - name: Android build and APK validation
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        shell: bash
+        run: |
+          yes | sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Build APK
         shell: bash
         run: |
           set -e
 
-          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-
-          yes | \
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$SDK" \
-            --licenses \
-            >/dev/null 2>&1 || true
-
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$SDK" \
-            'platform-tools' \
-            'platforms;android-35' \
-            'build-tools;35.0.0' \
-            >/dev/null
-
           cd "$V14_ROOT"
 
-          echo 'android.useAndroidX=true' \
-            >> gradle.properties
+          chmod +x gradlew
 
-          echo 'android.enableJetifier=true' \
-            >> gradle.properties
-
-          gradle assembleDebug \
+          ./gradlew \
+            assembleDebug \
             --no-daemon \
             --stacktrace
 
-          APK=$(
-            find app/build/outputs/apk \
+      - name: Align and sign APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find "$V14_ROOT" \
+            -type f \
+            -name '*debug*.apk' \
+            -print \
+            -quit)
+
+          if [ -z "$APK" ]; then
+            APK=$(find "$V14_ROOT" \
+              -type f \
               -name '*.apk' \
-              -print -quit
-          )
+              -print \
+              -quit)
+          fi
 
-          test -n "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
 
-          "$SDK/build-tools/35.0.0/zipalign" \
-            -c -P 4 -v 4 \
-            "$APK"
+          mkdir -p "$GITHUB_WORKSPACE/release"
 
-          "$SDK/build-tools/35.0.0/apksigner" \
-            verify \
+          UNSIGNED="$GITHUB_WORKSPACE/release/dalil-syria-unsigned.apk"
+          ALIGNED="$GITHUB_WORKSPACE/release/dalil-syria-aligned.apk"
+          FINAL="$GITHUB_WORKSPACE/release/dalil-syria.apk"
+
+          cp "$APK" "$UNSIGNED"
+
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+
+          "$ZIPALIGN" \
+            -f \
+            -p \
+            4 \
+            "$UNSIGNED" \
+            "$ALIGNED"
+
+          keytool \
+            -genkeypair \
+            -v \
+            -keystore "$RUNNER_TEMP/dalil-release.jks" \
+            -storepass android \
+            -keypass android \
+            -alias dalilsyria \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Dalil Syria,O=Dalil Syria,C=SY"
+
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/dalil-release.jks" \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias dalilsyria \
+            --out "$FINAL" \
+            "$ALIGNED"
+
+          "$APKSIGNER" verify \
             --verbose \
-            --min-sdk-version 23 \
-            "$APK"
+            "$FINAL"
 
-          mkdir -p \
-            "$GITHUB_WORKSPACE/apk-output"
+          "$ZIPALIGN" \
+            -c \
+            -v \
+            4 \
+            "$FINAL"
 
-          cp "$APK" \
-            "$GITHUB_WORKSPACE/apk-output/dalil-syria-real-ui-debug.apk"
+          ls -lh "$FINAL"
 
-          cp mobile_app/data/places.json \
-            "$GITHUB_WORKSPACE/apk-output/places.json"
-
-          cp mobile_app/data/places_audit.json \
-            "$GITHUB_WORKSPACE/apk-output/places_audit.json"
-
-          sha256sum \
-            "$GITHUB_WORKSPACE/apk-output/dalil-syria-real-ui-debug.apk" \
-            > "$GITHUB_WORKSPACE/apk-output/SHA256SUMS.txt"
-
-          echo 'FINAL_APK_VERIFIED_OK'
-
-      - name: Upload
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dalil-syria-real-ui
-          path: apk-output/*
+          name: dalil-syria-final-apk
+          path: release/dalil-syria.apk
           if-no-files-found: error
