@@ -129,15 +129,15 @@ jobs:
         run: |
           set -e
 
-          rm -rf "$V14_ROOT/android/app/src/main/assets/mobile_app"
+          rm -rf "$V14_ROOT/app/src/main/assets/mobile_app"
 
-          mkdir -p "$V14_ROOT/android/app/src/main/assets"
+          mkdir -p "$V14_ROOT/app/src/main/assets"
 
           cp -a "$V14_ROOT/mobile_app" \
-             "$V14_ROOT/android/app/src/main/assets/mobile_app"
+             "$V14_ROOT/app/src/main/assets/mobile_app"
 
-          test -f "$V14_ROOT/android/app/src/main/assets/mobile_app/index.html"
-          test -f "$V14_ROOT/android/app/src/main/assets/mobile_app/app.js"
+          test -f "$V14_ROOT/app/src/main/assets/mobile_app/index.html"
+          test -f "$V14_ROOT/app/src/main/assets/mobile_app/app.js"
 
       - name: Configure Android SDK
         shell: bash
@@ -175,7 +175,7 @@ jobs:
         run: |
           set -e
 
-          cd "$V14_ROOT/android"
+          cd "$V14_ROOT"
 
           touch gradle.properties
 
@@ -201,7 +201,7 @@ jobs:
 
           mkdir -p apk-output
 
-          APK=$(find "$V14_ROOT/android/app/build/outputs/apk" \
+          APK=$(find "$V14_ROOT/app/build/outputs/apk" \
             -type f \
             -name "*.apk" \
             -print -quit)
