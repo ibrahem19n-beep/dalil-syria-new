@@ -506,8 +506,9 @@ jobs:
             before+
             css+
             scripts+
-            after+
-            '<script src="real-fix.js"></script>'
+            '<script src="real-fix.js"></script>'+
+            after
+            
           )
 
           h.write_text(html,encoding='utf-8')
