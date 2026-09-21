@@ -277,7 +277,7 @@ jobs:
           hospital:'مشافي',
           services:'خدمات'};
 
-          const esc=x=>String(x??'').replace(
+          const realEsc=x=>String(x??'').replace(
             /[&<>"']/g,
             m=>({
               '&':'&amp;',
@@ -336,14 +336,14 @@ jobs:
               (p,i)=>
               '<button type="button" class="realCard" data-i="'+i+'">'+
               '<b>'+
-              esc(
+              realEsc(
                 window.DALIL_LANG==='en'
                 ?(p.name_en||p.name_ar)
                 :(p.name_ar||p.name_en)
               )+
               '</b>'+
               '<small>'+
-              esc(
+              realEsc(
                 window.DALIL_LANG==='en'
                 ?(p.address_en||p.address_ar)
                 :(p.address_ar||p.address_en)
