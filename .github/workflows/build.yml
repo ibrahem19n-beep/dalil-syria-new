@@ -176,7 +176,7 @@ jobs:
           cd maplibre
 
           npm init -y >/dev/null 2>&1
-          npm install --silent maplibre-gl@6.10.0
+          npm install --silent maplibre-gl@4.7.1
 
           MAP_JS=$(find node_modules/maplibre-gl -type f \
             \( -name 'maplibre-gl.js' -o -name 'maplibre-gl.min.js' \) \
