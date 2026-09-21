@@ -178,10 +178,21 @@ jobs:
           npm init -y >/dev/null 2>&1
           npm install --silent maplibre-gl@6.10.0
 
-          cp node_modules/maplibre-gl/dist/maplibre-gl.js \
+          MAP_JS=$(find node_modules/maplibre-gl -type f \
+            \( -name 'maplibre-gl.js' -o -name 'maplibre-gl.min.js' \) \
+            -print -quit)
+
+          MAP_CSS=$(find node_modules/maplibre-gl -type f \
+            -name 'maplibre-gl.css' \
+            -print -quit)
+
+          test -n "$MAP_JS"
+          test -n "$MAP_CSS"
+
+          cp "$MAP_JS" \
              "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
 
-          cp node_modules/maplibre-gl/dist/maplibre-gl.css \
+          cp "$MAP_CSS" \
              "$V14_ROOT/mobile_app/vendor/maplibre-gl.css"
 
           cp "$V14_ROOT/mobile_app/data/places.json" \
@@ -189,7 +200,6 @@ jobs:
 
           cp "$V14_ROOT/mobile_app/data/places_audit.json" \
              "$GITHUB_WORKSPACE/places_audit.json"
-
       - name: Add real app layer
         shell: bash
         run: |
