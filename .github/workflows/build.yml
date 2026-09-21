@@ -76,7 +76,7 @@ jobs:
 
           cd "$PROJECT"
 
-          python "$SCRIPT" --limit 10000
+          python tools/build_bulk_places.py --limit 10000
 
           test -s mobile_app/data/places.json
 
