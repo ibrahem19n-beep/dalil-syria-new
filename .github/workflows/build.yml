@@ -60,7 +60,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "duckdb>=1.4.0,<1.5"
 
-      - name: Build V1.4 data
+      - name: Build V1.4 Damascus and Rif data
         shell: bash
         run: |
           set -e
@@ -120,9 +120,30 @@ jobs:
           test -f "$V14_ROOT/mobile_app/index.html"
           test -f "$V14_ROOT/mobile_app/app.js"
           test -f "$V14_ROOT/mobile_app/styles.css"
+          test -f "$V14_ROOT/mobile_app/manifest.webmanifest"
+          test -f "$V14_ROOT/mobile_app/sw.js"
           test -s "$V14_ROOT/mobile_app/data/places.json"
 
           echo "COMPLETE MOBILE APP RESTORED"
+
+      - name: Verify map and language assets
+        shell: bash
+        run: |
+          set -e
+
+          APP="$V14_ROOT/mobile_app"
+
+          test -f "$APP/index.html"
+          test -f "$APP/app.js"
+
+          grep -qi "maplibre" "$APP/index.html" "$APP/app.js"
+          grep -qi "openfreemap" "$APP/index.html" "$APP/app.js"
+
+          grep -qi "langToggle\|dalil_lang\|FULL_I18N\|I18N" \
+            "$APP/index.html" "$APP/app.js"
+
+          echo "MAP_CODE_PRESENT"
+          echo "LANGUAGE_CODE_PRESENT"
 
       - name: Copy mobile app into Android assets
         shell: bash
@@ -138,6 +159,44 @@ jobs:
 
           test -f "$V14_ROOT/app/src/main/assets/mobile_app/index.html"
           test -f "$V14_ROOT/app/src/main/assets/mobile_app/app.js"
+          test -s "$V14_ROOT/app/src/main/assets/mobile_app/data/places.json"
+
+      - name: Ensure Android internet permission
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST="$V14_ROOT/app/src/main/AndroidManifest.xml"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
+
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+            python - "$MANIFEST" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          permission = '    <uses-permission android:name="android.permission.INTERNET" />\n'
+
+          marker = "<application"
+          pos = s.find(marker)
+
+          if pos == -1:
+              raise SystemExit("application tag not found")
+
+          s = s[:pos] + permission + s[pos:]
+          p.write_text(s, encoding="utf-8")
+          PY
+          fi
+
+          grep -q 'android.permission.INTERNET' "$MANIFEST"
+
+          echo "INTERNET_PERMISSION_OK"
 
       - name: Configure Android SDK
         shell: bash
@@ -194,6 +253,47 @@ jobs:
 
           gradle assembleDebug --no-daemon --stacktrace
 
+      - name: Validate APK structure and signature
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find "$V14_ROOT/app/build/outputs/apk" \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "APK was not generated"
+            exit 1
+          fi
+
+          echo "APK=$APK"
+
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          ZIPALIGN="$SDK/build-tools/35.0.0/zipalign"
+          APKSIGNER="$SDK/build-tools/35.0.0/apksigner"
+          AAPT2="$SDK/build-tools/35.0.0/aapt2"
+
+          test -x "$ZIPALIGN"
+          test -x "$APKSIGNER"
+
+          "$ZIPALIGN" -c -P 4 -v 4 "$APK"
+
+          "$APKSIGNER" verify \
+            --verbose \
+            --min-sdk-version 23 \
+            "$APK"
+
+          "$AAPT2" dump badging "$APK" | tee "$GITHUB_WORKSPACE/apk-badging.txt"
+
+          grep -q '^package:' "$GITHUB_WORKSPACE/apk-badging.txt"
+          grep -q '^application-label:' "$GITHUB_WORKSPACE/apk-badging.txt"
+
+          echo "APK_STRUCTURE_OK"
+          echo "APK_SIGNATURE_OK"
+          echo "APK_BADGING_OK"
+
       - name: Collect APK
         shell: bash
         run: |
@@ -206,20 +306,41 @@ jobs:
             -name "*.apk" \
             -print -quit)
 
-          if [ -z "$APK" ]; then
-            echo "APK was not generated"
-            exit 1
-          fi
-
           cp "$APK" \
             apk-output/dalil-syria-v1.4-fixed-debug.apk
 
           cp "$V14_ROOT/mobile_app/data/places.json" \
             apk-output/places.json
 
-          sha256sum apk-output/* > apk-output/SHA256SUMS.txt
+          cp "$GITHUB_WORKSPACE/apk-badging.txt" \
+            apk-output/apk-badging.txt
+
+          sha256sum apk-output/dalil-syria-v1.4-fixed-debug.apk \
+            > apk-output/SHA256SUMS.txt
 
           ls -lh apk-output
+
+      - name: Final APK verification
+        shell: bash
+        run: |
+          set -e
+
+          APK="apk-output/dalil-syria-v1.4-fixed-debug.apk"
+
+          test -s "$APK"
+
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          APKSIGNER="$SDK/build-tools/35.0.0/apksigner"
+          ZIPALIGN="$SDK/build-tools/35.0.0/zipalign"
+
+          "$ZIPALIGN" -c -P 4 -v 4 "$APK"
+
+          "$APKSIGNER" verify \
+            --verbose \
+            --min-sdk-version 23 \
+            "$APK"
+
+          echo "FINAL_APK_VERIFIED_OK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
