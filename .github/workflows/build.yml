@@ -190,7 +190,7 @@ jobs:
         run: |
           set -e
 
-          cd "$V14_ROOT/android"
+          cd "$V14_ROOT"
 
           gradle assembleDebug --no-daemon --stacktrace
 
