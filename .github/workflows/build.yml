@@ -162,7 +162,7 @@ jobs:
           rm -rf "$V14_ROOT/mobile_app"
           cp -a "$CLEAN_MOBILE" "$V14_ROOT/mobile_app"
 
-          mkdir -p "$V14_ROOT/mobile_app/vendor"
+          
 
           cp "$GITHUB_WORKSPACE/places.json" \
              "$V14_ROOT/mobile_app/data/places.json"
