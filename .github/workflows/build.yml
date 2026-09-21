@@ -42,7 +42,24 @@ jobs:
         run: |
           set -e
           cd "$V14_ROOT"
-          python tools/build_bulk_places.py --limit 100000
+          SCRIPT=$(find "$GITHUB_WORKSPACE/v14" -type f -name 'build_bulk_places.py' -print -quit || true)
+
+          if [ -n "$SCRIPT" ]; then
+            echo "Using builder: $SCRIPT"
+            python "$SCRIPT" --limit 100000
+          else
+            echo "Builder script not included; using existing places.json."
+            SRC=$(find "$V14_ROOT" -type f -path '*/mobile_app/data/places.json' -print -quit || true)
+            if [ -z "$SRC" ]; then
+              SRC=$(find "$V14_ROOT" -type f -name 'places.json' -print -quit || true)
+            fi
+            if [ -z "$SRC" ]; then
+              echo "ERROR: no places.json found."
+              exit 1
+            fi
+            mkdir -p mobile_app/data
+            cp "$SRC" mobile_app/data/places.json
+          fi
 
           python - <<'PY'
           import json
