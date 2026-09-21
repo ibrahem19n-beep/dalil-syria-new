@@ -1,822 +1,689 @@
-name: Dalil Syria - Real UI Fix
+name: Dalil Syria - Real UI
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract projects
+      - name: Extract and locate
         shell: bash
         run: |
           set -e
           rm -rf v14 clean
           mkdir -p v14 clean
+          unzip -q .github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip -d v14
+          unzip -q Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip -d clean
+          echo "V14_ROOT=$(dirname "$(find v14 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)")" >> "$GITHUB_ENV"
+          echo "CLEAN_MOBILE=$(find clean -type d -path '*/mobile_app' -print -quit)" >> "$GITHUB_ENV"
 
-          unzip -q ".github/workflows/Dalil_Syria_V1.4_DAMASCUS_RIF_BULK_READY.zip" -d v14
-          unzip -q "Dalil_Syria_CLEAN_INSTALL_V1.2.1.zip" -d clean
-
-      - name: Locate projects
-        shell: bash
-        run: |
-          set -e
-
-          SETTINGS=$(find v14 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
-          test -n "$SETTINGS" || {
-            echo "V1.4 Android project not found"
-            exit 1
-          }
-
-          V14_ROOT=$(dirname "$SETTINGS")
-          echo "V14_ROOT=$V14_ROOT" >> "$GITHUB_ENV"
-
-          CLEAN_MOBILE=$(find clean -type d -path '*/mobile_app' -print -quit)
-          test -n "$CLEAN_MOBILE" || {
-            echo "Clean mobile_app not found"
-            exit 1
-          }
-
-          echo "CLEAN_MOBILE=$CLEAN_MOBILE" >> "$GITHUB_ENV"
-
-      - name: Setup Python
+      - name: Setup tools
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Install data dependency
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install "duckdb>=1.4.0,<1.5"
+          python -m pip install -U pip
+          python -m pip install 'duckdb>=1.4.0,<1.5'
 
-      - name: Build and validate places
+      - name: Build and validate all places
         shell: bash
         run: |
           set -e
-
-          SCRIPT=$(find v14 -type f -path '*/tools/build_bulk_places.py' -print -quit)
-          test -n "$SCRIPT" || {
-            echo "Bulk builder not found"
-            exit 1
-          }
-
-          PROJECT=$(dirname "$(dirname "$SCRIPT")")
-          cd "$PROJECT"
-
-          python tools/build_bulk_places.py --limit 10000
-
-          test -s mobile_app/data/places.json
+          cd "$V14_ROOT"
+          python tools/build_bulk_places.py --limit 100000
 
           python - <<'PY'
           import json
           from pathlib import Path
 
-          p = Path("mobile_app/data/places.json")
-          source = json.loads(p.read_text(encoding="utf-8"))
+          p=Path('mobile_app/data/places.json')
+          src=json.loads(p.read_text(encoding='utf-8'))
 
-          if not isinstance(source, list):
-              raise SystemExit("places.json is not a list")
+          if not isinstance(src,list):
+              raise SystemExit('places.json is not a list')
 
-          original_count = len(source)
-          valid = []
-          removed = []
-          seen_ids = set()
-
-          required = [
-              "id",
-              "name_ar",
-              "name_en",
-              "category_ar",
-              "category_en",
-              "latitude",
-              "longitude"
+          req=[
+              'id',
+              'name_ar',
+              'name_en',
+              'category_ar',
+              'category_en',
+              'latitude',
+              'longitude'
           ]
 
-          for index, place in enumerate(source):
-              try:
-                  if not isinstance(place, dict):
-                      raise ValueError("record is not an object")
+          good=[]
+          bad=[]
+          ids=set()
 
-                  missing = [
-                      key for key in required
-                      if place.get(key) is None
-                      or str(place.get(key)).strip() == ""
+          for i,x in enumerate(src):
+              try:
+                  if not isinstance(x,dict):
+                      raise ValueError('record is not an object')
+
+                  miss=[
+                      k for k in req
+                      if x.get(k) is None or not str(x.get(k)).strip()
                   ]
 
-                  if missing:
-                      raise ValueError(
-                          "missing required fields: " +
-                          ",".join(missing)
-                      )
+                  if miss:
+                      raise ValueError('missing: '+','.join(miss))
 
-                  pid = str(place["id"]).strip()
+                  pid=str(x['id']).strip()
 
-                  if pid in seen_ids:
-                      raise ValueError("duplicate id: " + pid)
+                  if pid in ids:
+                      raise ValueError('duplicate id: '+pid)
 
-                  lat = float(place["latitude"])
-                  lon = float(place["longitude"])
+                  lat=float(x['latitude'])
+                  lon=float(x['longitude'])
 
-                  if not (-90 <= lat <= 90):
-                      raise ValueError("invalid latitude")
+                  if not -90 <= lat <= 90:
+                      raise ValueError('invalid latitude')
 
-                  if not (-180 <= lon <= 180):
-                      raise ValueError("invalid longitude")
+                  if not -180 <= lon <= 180:
+                      raise ValueError('invalid longitude')
 
-                  seen_ids.add(pid)
-                  valid.append(place)
+                  ids.add(pid)
+                  good.append(x)
 
-              except Exception as exc:
-                  removed.append({
-                      "index": index,
-                      "id": place.get("id") if isinstance(place, dict) else None,
-                      "reason": str(exc)
+              except Exception as e:
+                  bad.append({
+                      'index':i,
+                      'id':x.get('id') if isinstance(x,dict) else None,
+                      'reason':str(e)
                   })
 
-          if not valid:
-              raise SystemExit("No valid places remain")
+          if not good:
+              raise SystemExit('No valid places remain')
 
           p.write_text(
-              json.dumps(valid, ensure_ascii=False),
-              encoding="utf-8"
+              json.dumps(good,ensure_ascii=False),
+              encoding='utf-8'
           )
 
-          audit = Path("mobile_app/data/places_audit.json")
-
-          audit.write_text(
+          Path(
+              'mobile_app/data/places_audit.json'
+          ).write_text(
               json.dumps(
                   {
-                      "original_count": original_count,
-                      "removed_count": len(removed),
-                      "final_valid_count": len(valid),
-                      "removed": removed
+                      'original_count':len(src),
+                      'removed_count':len(bad),
+                      'final_valid_count':len(good),
+                      'removed':bad
                   },
                   ensure_ascii=False,
                   indent=2
               ),
-              encoding="utf-8"
+              encoding='utf-8'
           )
 
-          print("ORIGINAL_PLACE_COUNT =", original_count)
-          print("REMOVED_INVALID_PLACES =", len(removed))
-          print("FINAL_VALID_PLACE_COUNT =", len(valid))
-          print("DATA_VALIDATION_OK")
+          print('ORIGINAL_PLACE_COUNT=',len(src))
+          print('REMOVED_INVALID_PLACES=',len(bad))
+          print('FINAL_VALID_PLACE_COUNT=',len(good))
           PY
 
-          cp mobile_app/data/places.json "$GITHUB_WORKSPACE/places-v14.json"
-          cp mobile_app/data/places_audit.json "$GITHUB_WORKSPACE/places-audit.json"
+          cp mobile_app/data/places.json "$GITHUB_WORKSPACE/places.json"
+          cp mobile_app/data/places_audit.json "$GITHUB_WORKSPACE/places_audit.json"
 
-      - name: Restore complete mobile app
+      - name: Install clean UI and bundle local map
         shell: bash
         run: |
           set -e
 
           rm -rf "$V14_ROOT/mobile_app"
-
           cp -a "$CLEAN_MOBILE" "$V14_ROOT/mobile_app"
 
-          cp "$GITHUB_WORKSPACE/places-v14.json" \
+          mkdir -p "$V14_ROOT/mobile_app/vendor"
+
+          cp "$GITHUB_WORKSPACE/places.json" \
              "$V14_ROOT/mobile_app/data/places.json"
 
-          cp "$GITHUB_WORKSPACE/places-audit.json" \
+          cp "$GITHUB_WORKSPACE/places_audit.json" \
              "$V14_ROOT/mobile_app/data/places_audit.json"
 
-          test -f "$V14_ROOT/mobile_app/index.html"
-          test -f "$V14_ROOT/mobile_app/app.js"
-          test -f "$V14_ROOT/mobile_app/styles.css"
-          test -s "$V14_ROOT/mobile_app/data/places.json"
-
-          echo "BASE_MOBILE_APP_OK"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Bundle local MapLibre
-        shell: bash
-        run: |
-          set -e
-
-          APP="$V14_ROOT/mobile_app"
-          TMP="$RUNNER_TEMP/maplibre"
-
-          rm -rf "$TMP"
-          mkdir -p "$TMP" "$APP/vendor"
-
-          cd "$TMP"
+          cd "$RUNNER_TEMP"
+          rm -rf maplibre
+          mkdir maplibre
+          cd maplibre
 
           npm init -y >/dev/null 2>&1
           npm install --silent maplibre-gl@6.10.0
 
           cp node_modules/maplibre-gl/dist/maplibre-gl.js \
-             "$APP/vendor/maplibre-gl.js"
+             "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
 
           cp node_modules/maplibre-gl/dist/maplibre-gl.css \
-             "$APP/vendor/maplibre-gl.css"
+             "$V14_ROOT/mobile_app/vendor/maplibre-gl.css"
 
-          test -s "$APP/vendor/maplibre-gl.js"
-          test -s "$APP/vendor/maplibre-gl.css"
+          cp "$V14_ROOT/mobile_app/data/places.json" \
+             "$GITHUB_WORKSPACE/places.json"
 
-          echo "LOCAL_MAPLIBRE_OK"
+          cp "$V14_ROOT/mobile_app/data/places_audit.json" \
+             "$GITHUB_WORKSPACE/places_audit.json"
 
-      - name: Bundle local place data
+      - name: Add real app layer
         shell: bash
         run: |
           set -e
 
           APP="$V14_ROOT/mobile_app"
 
-          python - "$APP/data/places.json" "$APP/data/places.js" <<'PY'
-          import json
-          import sys
+          python - "$APP/index.html" "$APP/real-fix.js" "$APP" <<'PY'
           from pathlib import Path
+          import sys
+          import re
 
-          source = Path(sys.argv[1])
-          target = Path(sys.argv[2])
+          h=Path(sys.argv[1])
+          f=Path(sys.argv[2])
+          app=Path(sys.argv[3])
 
-          data = json.loads(
-              source.read_text(encoding="utf-8")
+          html=h.read_text(encoding='utf-8')
+
+          js=r'''const CAT={
+          restaurant:['مطاعم','مطعم','restaurant','restaurants'],
+          cafe:['مقاهي','مقهى','كافيه','cafe','cafes','coffee'],
+          hotel:['فنادق','فندق','hotel','hotels'],
+          tourism:['سياحة','سياحي','معلم','معالم','tourism','tourist','attraction'],
+          exchange:['صرافة','صراف','صيرفة','exchange','money exchange'],
+          car:['تأجير سيارات','تأجير سيارة','car rental','cars'],
+          company:['شركة','شركات','company','companies'],
+          internet:['إنترنت','انترنت','internet'],
+          supermarket:['سوبرماركت','سوبر ماركت','ماركت','supermarket','market'],
+          fuel:['محطة وقود','وقود','fuel','gas station'],
+          chalet:['شاليه','شاليهات','chalet','chalets'],
+          pool:['مسبح','مسابح','pool','pools'],
+          pharmacy:['صيدلية','صيدليات','pharmacy','pharmacies'],
+          hospital:['مشفى','مشافي','مستشفى','مستشفيات','hospital','hospitals'],
+          services:['خدمات','خدمة','service','services']};
+
+          const EN={
+          restaurant:'Restaurants',
+          cafe:'Cafes',
+          hotel:'Hotels',
+          tourism:'Tourism',
+          exchange:'Exchange',
+          car:'Car Rental',
+          company:'Companies',
+          internet:'Internet',
+          supermarket:'Supermarkets',
+          fuel:'Fuel Stations',
+          chalet:'Chalets',
+          pool:'Pools',
+          pharmacy:'Pharmacies',
+          hospital:'Hospitals',
+          services:'Services'};
+
+          const AR={
+          restaurant:'مطاعم',
+          cafe:'مقاهي',
+          hotel:'فنادق',
+          tourism:'سياحة',
+          exchange:'صرافة',
+          car:'تأجير سيارات',
+          company:'شركات',
+          internet:'إنترنت',
+          supermarket:'سوبرماركت',
+          fuel:'محطات وقود',
+          chalet:'شاليهات',
+          pool:'مسابح',
+          pharmacy:'صيدليات',
+          hospital:'مشافي',
+          services:'خدمات'};
+
+          const esc=x=>String(x??'').replace(
+            /[&<>"']/g,
+            m=>({
+              '&':'&amp;',
+              '<':'&lt;',
+              '>':'&gt;',
+              '"':'&quot;',
+              "'":'&#39;'
+            }[m])
+          );
+
+          window.DALIL_LANG=
+            localStorage.getItem('dalil_lang')||'ar';
+
+          const data=()=>Array.isArray(window.DALIL_PLACES)
+            ?window.DALIL_PLACES
+            :[];
+
+          const text=p=>[
+            p.name_ar,
+            p.name_en,
+            p.category_ar,
+            p.category_en,
+            p.address_ar,
+            p.address_en,
+            ...(Array.isArray(p.aliases)?p.aliases:[])
+          ].filter(Boolean).join(' ').toLowerCase();
+
+          function keyFor(s){
+            s=String(s||'').toLowerCase();
+
+            for(const[k,v] of Object.entries(CAT))
+              if(v.some(x=>s.includes(x.toLowerCase())))
+                return k;
+
+            return null;
+          }
+
+          function results(list,key){
+            let box=document.querySelector('#realResults');
+
+            if(!box){
+              box=document.createElement('section');
+              box.id='realResults';
+              box.innerHTML=
+                '<h2 id="realTitle"></h2><div id="realCards"></div>';
+              document.body.appendChild(box);
+            }
+
+            document.querySelector('#realTitle').textContent=
+              (window.DALIL_LANG==='en'?EN[key]:AR[key])+
+              ' ('+list.length+')';
+
+            const cards=document.querySelector('#realCards');
+
+            cards.innerHTML=list.slice(0,100).map(
+              (p,i)=>
+              '<button type="button" class="realCard" data-i="'+i+'">'+
+              '<b>'+
+              esc(
+                window.DALIL_LANG==='en'
+                ?(p.name_en||p.name_ar)
+                :(p.name_ar||p.name_en)
+              )+
+              '</b>'+
+              '<small>'+
+              esc(
+                window.DALIL_LANG==='en'
+                ?(p.address_en||p.address_ar)
+                :(p.address_ar||p.address_en)
+              )+
+              '</small>'+
+              '</button>'
+            ).join('')||'<p>No places found.</p>';
+
+            cards.querySelectorAll('.realCard')
+              .forEach((b,i)=>
+                b.onclick=()=>{
+                  const p=list[i];
+
+                  if(typeof openPlace==='function'){
+                    try{
+                      return openPlace(p);
+                    }catch(e){}
+                  }
+
+                  alert(
+                    (window.DALIL_LANG==='en'
+                    ?(p.name_en||p.name_ar)
+                    :(p.name_ar||p.name_en))+
+                    '\n'+
+                    (p.phone||'')
+                  );
+                }
+              );
+
+            if(typeof plot==='function'&&window.map)
+              try{
+                plot(list);
+              }catch(e){
+                console.error(e);
+              }
+          }
+
+          function applyLang(){
+            const en=window.DALIL_LANG==='en';
+
+            document.documentElement.lang=
+              en?'en':'ar';
+
+            document.documentElement.dir=
+              en?'ltr':'rtl';
+
+            document
+              .querySelectorAll('#categoriesGrid button')
+              .forEach(b=>{
+                const k=
+                  b.dataset.dalilKey||
+                  keyFor(b.innerText);
+
+                if(k){
+                  b.dataset.dalilKey=k;
+                  b.textContent=en?EN[k]:AR[k];
+                }
+              });
+          }
+
+          document.addEventListener(
+            'DOMContentLoaded',
+            ()=>{
+              document
+                .querySelectorAll('#categoriesGrid button')
+                .forEach(
+                  b=>
+                  b.dataset.dalilKey=
+                    keyFor(b.innerText)||'services'
+                );
+
+              applyLang();
+            }
+          );
+
+          document.addEventListener(
+            'click',
+            async e=>{
+              const b=
+                e.target.closest('#categoriesGrid button');
+
+              if(!b)return;
+
+              e.preventDefault();
+              e.stopImmediatePropagation();
+
+              const k=
+                b.dataset.dalilKey||'services';
+
+              results(
+                data().filter(p=>{
+                  const t=text(p);
+                  return CAT[k].some(
+                    x=>t.includes(x.toLowerCase())
+                  );
+                }),
+                k
+              );
+            },
+            true
+          );
+
+          document.addEventListener(
+            'click',
+            e=>{
+              const b=
+                e.target.closest('#langToggle');
+
+              if(!b)return;
+
+              e.preventDefault();
+              e.stopImmediatePropagation();
+
+              window.DALIL_LANG=
+                window.DALIL_LANG==='en'
+                ?'ar'
+                :'en';
+
+              localStorage.setItem(
+                'dalil_lang',
+                window.DALIL_LANG
+              );
+
+              applyLang();
+            },
+            true
+          );'''
+
+          f.write_text(js,encoding='utf-8')
+
+          css='<link rel="stylesheet" href="vendor/maplibre-gl.css">'
+
+          scripts=(
+            '<script src="vendor/maplibre-gl.js"></script>'
+            '<script src="data/places.js"></script>'
           )
 
-          if not isinstance(data, list) or not data:
-              raise SystemExit("No place data available")
-
-          target.write_text(
-              "window.DALIL_PLACES=" +
-              json.dumps(
-                  data,
-                  ensure_ascii=False,
-                  separators=(",", ":")
-              ) +
-              ";",
-              encoding="utf-8"
+          places=(app/'data/places.json').read_text(
+            encoding='utf-8'
           )
 
-          print("BUNDLED_PLACE_COUNT =", len(data))
-          print("LOCAL_PLACE_DATA_OK")
+          (app/'data/places.js').write_text(
+            'window.DALIL_PLACES='+places+';',
+            encoding='utf-8'
+          )
+
+          marker=re.search(
+            r'<script[^>]+src=["\']([^"\']*app\.js[^"\']*)["\'][^>]*>\s*</script>',
+            html,
+            re.I
+          )
+
+          if not marker:
+            raise SystemExit('app.js script not found')
+
+          before=html[:marker.start()]
+          after=html[marker.start():]
+
+          html=(
+            before+
+            css+
+            scripts+
+            after+
+            '<script src="real-fix.js"></script>'
+          )
+
+          h.write_text(html,encoding='utf-8')
           PY
 
-          test -s "$APP/data/places.js"
-
-      - name: Patch real application
+      - name: Copy into Android assets
         shell: bash
         run: |
           set -e
 
-          APP="$V14_ROOT/mobile_app"
+          mkdir -p "$V14_ROOT/app/src/main/assets"
 
-          python - "$APP/index.html" "$APP/app.js" <<'PY'
-          from pathlib import Path
-          import sys
+          rm -rf \
+            "$V14_ROOT/app/src/main/assets/mobile_app"
 
-          index = Path(sys.argv[1])
-          app = Path(sys.argv[2])
+          cp -a \
+            "$V14_ROOT/mobile_app" \
+            "$V14_ROOT/app/src/main/assets/mobile_app"
 
-          html = index.read_text(encoding="utf-8")
-          js = app.read_text(encoding="utf-8")
+          test -s \
+            "$V14_ROOT/mobile_app/data/places.js"
 
-          # ------------------------------------------------------------
-          # LOCAL MAPLIBRE
-          # ------------------------------------------------------------
+          test -s \
+            "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
 
-          replacements = [
-              (
-                  '<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.css" crossorigin="">',
-                  '<link rel="stylesheet" href="vendor/maplibre-gl.css">'
-              ),
-              (
-                  '<script src="https://unpkg.com/maplibre-gl@6.10.0/dist/maplibre-gl.js" crossorigin=""></script>',
-                  '<script src="vendor/maplibre-gl.js"></script>\n<script src="data/places.js"></script>'
-              )
-          ]
+          test -s \
+            "$V14_ROOT/mobile_app/real-fix.js"
 
-          for old, new in replacements:
-              if old not in html:
-                  raise SystemExit(
-                      "Required MapLibre source not found"
-                  )
-              html = html.replace(old, new, 1)
+          grep -q 'android.permission.INTERNET' \
+            "$V14_ROOT/app/src/main/AndroidManifest.xml" \
+            || sed -i \
+            '/<application/i\    <uses-permission android:name="android.permission.INTERNET" />' \
+            "$V14_ROOT/app/src/main/AndroidManifest.xml"
 
-          # ------------------------------------------------------------
-          # RESULTS SECTION
-          # ------------------------------------------------------------
+      - name: Runtime browser test
+        shell: bash
+        run: |
+          set -e
 
-          if 'id="resultsSection"' not in html:
+          cd "$V14_ROOT/mobile_app"
 
-              insertion_points = [
-                  '<section class="homeAfterMap">',
-                  '<main',
-                  '<body'
-              ]
+          npm init -y >/dev/null 2>&1
+          npm install --silent playwright@1.55.0
 
-              inserted = False
+          npx playwright install --with-deps chromium \
+            >/dev/null 2>&1
 
-              results = '''
-<section id="resultsSection" class="resultsSection">
-  <div class="sectionHead">
-    <div>
-      <h2 id="resultsTitle">الأماكن</h2>
-      <p id="resultMeta">اختر تصنيفًا لعرض الأماكن</p>
-    </div>
-  </div>
+          python -m http.server 8765 \
+            --bind 127.0.0.1 \
+            >/tmp/dalil-http.log 2>&1 &
 
-  <div id="cards" class="cards">
-    <div class="empty" id="resultsEmpty">
-      اختر تصنيفًا أو ابحث عن مكان.
-    </div>
-  </div>
-</section>
-'''
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
 
-              for marker in insertion_points:
-                  if marker in html:
-                      html = html.replace(
-                          marker,
-                          results + "\n" + marker,
-                          1
-                      )
-                      inserted = True
-                      break
+          sleep 2
 
-              if not inserted:
-                  raise SystemExit(
-                      "Could not create results section"
-                  )
+          node - <<'NODE'
+          const {chromium}=require('playwright');
 
-          # ------------------------------------------------------------
-          # LOCAL DATA
-          # ------------------------------------------------------------
+          (async()=>{
+            const b=await chromium.launch({
+              headless:true
+            });
 
-          old_data = (
-              "async function ensureLocalData(){"
-              "if(localPlaces.length)return localPlaces;"
-              "const r=await fetch('./data/places.json',{cache:'no-store'});"
-              "if(!r.ok)throw Error('local data');"
-              "localPlaces=await r.json();"
-              "return localPlaces}"
-          )
+            const p=await b.newPage();
+            const err=[];
 
-          new_data = (
-              "async function ensureLocalData(){"
-              "if(localPlaces.length)return localPlaces;"
-              "if(Array.isArray(window.DALIL_PLACES)){"
-              "localPlaces=window.DALIL_PLACES;"
-              "return localPlaces;"
-              "}"
-              "const r=await fetch('./data/places.json',{cache:'no-store'});"
-              "if(!r.ok)throw Error('local data');"
-              "localPlaces=await r.json();"
-              "return localPlaces}"
-          )
+            p.on(
+              'pageerror',
+              e=>err.push(e.message)
+            );
 
-          if old_data in js:
-              js = js.replace(old_data, new_data, 1)
+            await p.goto(
+              'http://127.0.0.1:8765/index.html',
+              {
+                waitUntil:'domcontentloaded',
+                timeout:60000
+              }
+            );
 
-          # ------------------------------------------------------------
-          # MAP SAFETY
-          # ------------------------------------------------------------
+            await p.waitForTimeout(1500);
 
-          old_map = "function initMap(){\n map=new maplibregl.Map"
+            const n=await p.evaluate(
+              ()=>Array.isArray(window.DALIL_PLACES)
+                ?window.DALIL_PLACES.length
+                :0
+            );
 
-          if old_map in js:
-              new_map = """function initMap(){
- if(!window.maplibregl){
-   const el=document.querySelector('#map');
-   if(el){
-     el.innerHTML='<div class="empty mapUnavailable">تعذر تحميل محرك الخريطة.</div>';
-   }
-   return false;
- }
- map=new maplibregl.Map"""
+            if(n<1)
+              throw Error('places not loaded');
 
-              js = js.replace(old_map, new_map, 1)
-
-          # ------------------------------------------------------------
-          # CATEGORY SYSTEM
-          # ------------------------------------------------------------
-
-          category_code = r'''
-const REAL_CATEGORY_MAP={
-  restaurant:[
-    'مطعم','مطاعم','restaurant','restaurants'
-  ],
-  cafe:[
-    'مقهى','مقاهي','كافيه','cafe','cafes','coffee'
-  ],
-  hotel:[
-    'فندق','فنادق','hotel','hotels'
-  ],
-  tourism:[
-    'سياحة','سياحي','سياحية',
-    'معلم','معالم',
-    'tourism','tourist','attraction'
-  ],
-  exchange:[
-    'صرافة','صراف','صيرفة',
-    'exchange','money exchange'
-  ],
-  car:[
-    'تأجير سيارات','تأجير سيارة',
-    'سيارات','car rental','cars'
-  ],
-  company:[
-    'شركة','شركات',
-    'company','companies'
-  ],
-  internet:[
-    'انترنت','إنترنت','internet'
-  ],
-  supermarket:[
-    'سوبرماركت','سوبر ماركت',
-    'ماركت','متجر',
-    'supermarket','market'
-  ],
-  fuel:[
-    'محطة وقود','وقود',
-    'fuel','gas station'
-  ],
-  chalet:[
-    'شاليه','شاليهات',
-    'chalet','chalets'
-  ],
-  pool:[
-    'مسبح','مسابح',
-    'pool','pools'
-  ],
-  pharmacy:[
-    'صيدلية','صيدليات',
-    'pharmacy','pharmacies'
-  ],
-  hospital:[
-    'مشفى','مشافي',
-    'مستشفى','مستشفيات',
-    'hospital','hospitals'
-  ],
-  services:[
-    'خدمات','خدمة',
-    'service','services'
-  ]
-};
-
-function realPlaceText(place){
-  return [
-    place.name_ar,
-    place.name_en,
-    place.category_ar,
-    place.category_en,
-    place.address_ar,
-    place.address_en,
-    ...(Array.isArray(place.aliases)
-      ? place.aliases
-      : [])
-  ]
-  .filter(Boolean)
-  .join(' ')
-  .toLowerCase();
-}
-
-function realCategoryMatch(place,key){
-  const terms=REAL_CATEGORY_MAP[key]||[];
-  const text=realPlaceText(place);
-
-  return terms.some(term =>
-    text.includes(String(term).toLowerCase())
-  );
-}
-
-function escapeRealHtml(value){
-  return String(value??'')
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;')
-    .replace(/'/g,'&#039;');
-}
-
-function getRealPlaceName(place){
-  return uiLang==='en'
-    ?(place.name_en||place.name_ar||'')
-    :(place.name_ar||place.name_en||'');
-}
-
-function getRealCategoryName(place){
-  return uiLang==='en'
-    ?(place.category_en||place.category_ar||'')
-    :(place.category_ar||place.category_en||'');
-}
-
-function getRealAddress(place){
-  return uiLang==='en'
-    ?(place.address_en||place.address_ar||'')
-    :(place.address_ar||place.address_en||'');
-}
-
-function renderRealResults(list,title){
-
-  const cards=document.querySelector('#cards');
-  const meta=document.querySelector('#resultMeta');
-  const heading=document.querySelector('#resultsTitle');
-
-  if(!cards)return;
-
-  if(heading){
-    heading.textContent=
-      title ||
-      (uiLang==='en'?'Places':'الأماكن');
-  }
-
-  if(meta){
-    meta.textContent=
-      `${list.length} ${uiLang==='en'?'places':'مكان'}`;
-  }
-
-  if(!list.length){
-
-    cards.innerHTML=
-      `<div class="empty" id="resultsEmpty">${
-        uiLang==='en'
-          ?'No places found in this category.'
-          :'لا توجد أماكن مطابقة لهذا التصنيف.'
-      }</div>`;
-
-    return;
-  }
-
-  cards.innerHTML=list
-    .slice(0,100)
-    .map((place,index)=>`
-      <button
-        type="button"
-        class="placeCard"
-        data-real-place="${index}">
-        <strong>${escapeRealHtml(getRealPlaceName(place))}</strong>
-        <span>${escapeRealHtml(getRealCategoryName(place))}</span>
-        <small>${escapeRealHtml(getRealAddress(place))}</small>
-      </button>
-    `)
-    .join('');
-
-  [
-    ...cards.querySelectorAll('[data-real-place]')
-  ].forEach((element,index)=>{
-
-    element.onclick=()=>{
-      const place=list[index];
-
-      if(typeof openPlace==='function'){
-        try{
-          openPlace(place);
-          return;
-        }catch(error){
-          console.error(
-            'openPlace failed',
-            error
-          );
-        }
-      }
-
-      showRealPlaceFallback(place);
-    };
-  });
-}
-
-function showRealPlaceFallback(place){
-
-  const name=getRealPlaceName(place);
-  const category=getRealCategoryName(place);
-  const address=getRealAddress(place);
-
-  const phone=place.phone||'';
-
-  const existing=
-    document.querySelector('#realPlaceFallback');
-
-  if(existing)existing.remove();
-
-  const wrapper=document.createElement('div');
-
-  wrapper.id='realPlaceFallback';
-  wrapper.className='modal';
-
-  wrapper.innerHTML=`
-    <div class="modalCard">
-      <button
-        type="button"
-        class="modalClose"
-        aria-label="Close">×</button>
-
-      <h2>${escapeRealHtml(name)}</h2>
-
-      <p>${escapeRealHtml(category)}</p>
-
-      <p>${escapeRealHtml(address)}</p>
-
-      ${
-        phone
-          ? `<p>${escapeRealHtml(phone)}</p>`
-          :''
-      }
-
-      ${
-        place.latitude!=null &&
-        place.longitude!=null
-          ? `<button
-               type="button"
-               id="realPlaceMapButton">
-               ${uiLang==='en'
-                 ?'Show on map'
-                 :'عرض على الخريطة'}
-             </button>`
-          :''
-      }
-    </div>
-  `;
-
-  document.body.appendChild(wrapper);
-
-  const close=wrapper.querySelector('.modalClose');
-
-  if(close){
-    close.onclick=()=>wrapper.remove();
-  }
-
-  const mapButton=
-    wrapper.querySelector('#realPlaceMapButton');
-
-  if(mapButton){
-
-    mapButton.onclick=()=>{
-
-      wrapper.remove();
-
-      if(window.map &&
-         typeof window.map.flyTo==='function'){
-
-        window.map.flyTo({
-          center:[
-            Number(place.longitude),
-            Number(place.latitude)
-          ],
-          zoom:15
-        });
-      }
-    };
-  }
-}
-
-async function focusRealCategory(key,label){
-
-  const all=await ensureLocalData();
-
-  const filtered=all.filter(
-    place=>realCategoryMatch(place,key)
-  );
-
-  renderRealResults(
-    filtered,
-    label
-  );
-
-  if(
-    typeof plot==='function' &&
-    window.map &&
-    filtered.length
-  ){
-    try{
-      plot(filtered);
-    }catch(error){
-      console.error(
-        'Category map plot failed',
-        error
-      );
-    }
-  }
-
-  if(
-    window.map &&
-    filtered.length
-  ){
-
-    const first=filtered.find(
-      place=>
-        place.latitude!=null &&
-        place.longitude!=null
-    );
-
-    if(first){
-
-      window.map.flyTo({
-        center:[
-          Number(first.longitude),
-          Number(first.latitude)
-        ],
-        zoom:11
-      });
-    }
-  }
-
-  return filtered;
-}
-
-window.REAL_CATEGORY_MAP=
-  REAL_CATEGORY_MAP;
-
-window.focusRealCategory=
-  focusRealCategory;
-
-window.showRealPlaceFallback=
-  showRealPlaceFallback;
-'''
-
-          if "const REAL_CATEGORY_MAP=" not in js:
-              js += "\n" + category_code
-
-          # ------------------------------------------------------------
-          # CATEGORY BUTTONS
-          # ------------------------------------------------------------
-
-          category_handlers = r'''
-window.addEventListener('DOMContentLoaded',()=>{
-
-  const categoryGrid=
-    document.querySelector('#categoriesGrid');
-
-  if(!categoryGrid)return;
-
-  const buttons=[
-    ...categoryGrid.querySelectorAll('button')
-  ];
-
-  buttons.forEach(button=>{
-
-    button.addEventListener(
-      'click',
-      async()=>{
-
-        const label=
-          (button.innerText||'').trim();
-
-        const text=
-          label.toLowerCase();
-
-        let selected=null;
-
-        for(
-          const [key,terms]
-          of Object.entries(REAL_CATEGORY_MAP)
-        ){
-
-          if(
-            terms.some(
-              term=>
-                text.includes(
-                  String(term).toLowerCase()
-                )
-            )
-          ){
-            selected=key;
-            break;
-          }
-        }
-
-        if(!selected){
-
-          const aria=
-            (
-              button.getAttribute('aria-label')||''
-            ).toLowerCase();
-
-          for(
-            const [key,terms]
-            of Object.entries(REAL_CATEGORY_MAP)
-          ){
+            if(typeof window.maplibregl!=='object')
+              throw Error('MapLibre not loaded');
 
             if(
-              terms.some(
-                term=>
-                  aria.includes(
-                    String(term).toLowerCase()
-                  )
-              )
-            ){
-              selected=key;
-              break;
-            }
-          }
-        }
+              await p
+                .locator('#categoriesGrid button')
+                .count()<1
+            )
+              throw Error('categories missing');
 
-        if(!selected){
-          selected='services';
-        }
+            await p
+              .locator('#categoriesGrid button')
+              .first()
+              .click();
 
-        try{
+            await p.waitForTimeout(300);
 
-          await focu
+            if(
+              await p.locator('.realCard').count()<1
+            )
+              throw Error('category interaction failed');
+
+            await p.locator('#langToggle').click();
+
+            if(
+              await p.locator('html').getAttribute('dir')
+              !=='ltr'
+            )
+              throw Error('English switch failed');
+
+            if(err.length)
+              throw Error(err.join('\n'));
+
+            console.log(
+              'RUNTIME_OK places='+n
+            );
+
+            await b.close();
+          })().catch(e=>{
+            console.error(e.stack||e);
+            process.exit(1);
+          })
+          NODE
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Android build and APK validation
+        shell: bash
+        run: |
+          set -e
+
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+
+          yes | \
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            --licenses \
+            >/dev/null 2>&1 || true
+
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            'platform-tools' \
+            'platforms;android-35' \
+            'build-tools;35.0.0' \
+            >/dev/null
+
+          cd "$V14_ROOT"
+
+          echo 'android.useAndroidX=true' \
+            >> gradle.properties
+
+          echo 'android.enableJetifier=true' \
+            >> gradle.properties
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+          APK=$(
+            find app/build/outputs/apk \
+              -name '*.apk' \
+              -print -quit
+          )
+
+          test -n "$APK"
+
+          "$SDK/build-tools/35.0.0/zipalign" \
+            -c -P 4 -v 4 \
+            "$APK"
+
+          "$SDK/build-tools/35.0.0/apksigner" \
+            verify \
+            --verbose \
+            --min-sdk-version 23 \
+            "$APK"
+
+          mkdir -p \
+            "$GITHUB_WORKSPACE/apk-output"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/dalil-syria-real-ui-debug.apk"
+
+          cp mobile_app/data/places.json \
+            "$GITHUB_WORKSPACE/apk-output/places.json"
+
+          cp mobile_app/data/places_audit.json \
+            "$GITHUB_WORKSPACE/apk-output/places_audit.json"
+
+          sha256sum \
+            "$GITHUB_WORKSPACE/apk-output/dalil-syria-real-ui-debug.apk" \
+            > "$GITHUB_WORKSPACE/apk-output/SHA256SUMS.txt"
+
+          echo 'FINAL_APK_VERIFIED_OK'
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dalil-syria-real-ui
+          path: apk-output/*
+          if-no-files-found: error
