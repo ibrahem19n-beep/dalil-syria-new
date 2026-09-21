@@ -188,6 +188,7 @@ jobs:
 
           test -n "$MAP_JS"
           test -n "$MAP_CSS"
+          mkdir -p "$V14_ROOT/mobile_app/vendor"
 
           cp "$MAP_JS" \
              "$V14_ROOT/mobile_app/vendor/maplibre-gl.js"
